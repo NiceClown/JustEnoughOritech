@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.justenoughoritech.mixin",
+  "client": ["KeyboardHandlerMixin"],
+  "injectors": {"defaultRequire": 1}
+}

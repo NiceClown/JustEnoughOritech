@@ -1,0 +1,141 @@
+package com.justenoughoritech.sim;
+
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.List;
+
+public final class ReactorLayout {
+    private int width = 3;
+    private int length = 3;
+    private int height = 3;
+    private int energyPorts = 1;
+    private ReactorParts.Part[] cells = new ReactorParts.Part[9];
+
+    public ReactorLayout() { Arrays.fill(cells, ReactorParts.Part.EMPTY); }
+    public int width() { return width; }
+    public int length() { return length; }
+    public int height() { return height; }
+    public int energyPorts() { return energyPorts; }
+    public void setEnergyPorts(int count) { energyPorts = Math.clamp(count, 1, maxEnergyPorts(width,length,height)); }
+    public static int maxEnergyPorts(int width,int length,int height) {
+        return (int)Math.min(Integer.MAX_VALUE,2L*(width+(long)length)*height-1);
+    }
+    public ReactorParts.Part get(int x, int z) { return cells[z * width + x]; }
+    public void set(int x, int z, ReactorParts.Part part) { cells[z * width + x] = part; }
+    public void setHeight(int height, int max) {
+        this.height = Math.max(1, Math.min(max, height));
+        setEnergyPorts(energyPorts);
+    }
+
+    public void resize(int newWidth, int newLength, int max) {
+        newWidth = Math.max(1, Math.min(max, newWidth));
+        newLength = Math.max(1, Math.min(max, newLength));
+        var next = new ReactorParts.Part[newWidth * newLength];
+        Arrays.fill(next, ReactorParts.Part.EMPTY);
+        for (int z = 0; z < Math.min(length, newLength); z++)
+            for (int x = 0; x < Math.min(width, newWidth); x++) next[z * newWidth + x] = get(x, z);
+        width = newWidth;
+        length = newLength;
+        cells = next;
+        setEnergyPorts(energyPorts);
+    }
+
+    public ReactorLayout copy() {
+        var copy = new ReactorLayout();
+        copy.replaceWith(this);
+        return copy;
+    }
+
+    public void replaceWith(ReactorLayout other) {
+        width = other.width;
+        length = other.length;
+        height = other.height;
+        energyPorts = other.energyPorts;
+        cells = other.cells.clone();
+    }
+
+    public static final String WALL = "oritech:reactor_wall";
+    public static final String CONTROLLER = "oritech:nuclear_reactor_controller";
+    public static final String FUEL_PORT = "oritech:reactor_fuel_port";
+    public static final String COOLANT_PORT = "oritech:reactor_coolant_absorber_port";
+    public static final String ENERGY_PORT = "oritech:reactor_energy_port";
+
+    public record Placement(int x, int y, int z, String blockId) {}
+
+    /** The origin is the outside bottom corner with the smallest X and Z. */
+    public List<Placement> placements() {
+        var blocks = new java.util.ArrayList<Placement>();
+        int ports = energyPorts;
+        for (int y = 0; y <= height + 1; y++) {
+            for (int z = 0; z <= length + 1; z++) {
+                for (int x = 0; x <= width + 1; x++) {
+                    boolean insideX = x > 0 && x <= width;
+                    boolean insideZ = z > 0 && z <= length;
+                    boolean insideY = y > 0 && y <= height;
+                    String id = WALL;
+                    if (insideX && insideZ && insideY) {
+                        var part = get(x - 1, z - 1);
+                        if (part.kind() == ReactorParts.Kind.EMPTY) continue;
+                        id = part.id();
+                    } else if (insideX && insideZ && y == height + 1) {
+                        id = switch (get(x - 1, z - 1).kind()) {
+                            case ROD -> FUEL_PORT;
+                            case ABSORBER -> COOLANT_PORT;
+                            default -> WALL;
+                        };
+                    } else if (insideY && (insideX != insideZ)) {
+                        if (x == 0 && y == 1 && z == 1) id = CONTROLLER;
+                        else if (ports > 0) {
+                            id = ENERGY_PORT;
+                            ports--;
+                        }
+                    }
+                    blocks.add(new Placement(x, y, z, id));
+                }
+            }
+        }
+        return List.copyOf(blocks);
+    }
+
+    public void clear() { Arrays.fill(cells, ReactorParts.Part.EMPTY); }
+
+    public List<String> validationErrors(int max) {
+        var errors = new java.util.ArrayList<String>();
+        int rods=0, topPorts=0;
+        for (var part : cells) {
+            if (part.kind()==ReactorParts.Kind.ROD) { rods++; topPorts++; }
+            if (part.kind()==ReactorParts.Kind.ABSORBER) topPorts++;
+        }
+        if (width>max || length>max || height>max) errors.add("gui.just_enough_oritech.dimensions");
+        if (rods==0) errors.add("gui.just_enough_oritech.need_rod");
+        if (energyPorts<1) errors.add("gui.just_enough_oritech.need_energy");
+        if (energyPorts>maxEnergyPorts(width,length,height)) errors.add("gui.just_enough_oritech.port_space");
+        if (topPorts >= (width+2)*(length+2)) errors.add("gui.just_enough_oritech.ceiling_space");
+        return List.copyOf(errors);
+    }
+
+    /** Block counts for the repeated core, outer shell, ceiling ports, controller and energy ports. */
+    public Map<String,Integer> blockCounts() {
+        var counts = new LinkedHashMap<String,Integer>();
+        int ceilingPorts=0;
+        for (var part : cells) {
+            if (part.kind()==ReactorParts.Kind.EMPTY) continue;
+            counts.merge(part.id(),height,Integer::sum);
+            if (part.kind()==ReactorParts.Kind.ROD) {
+                counts.merge("oritech:reactor_fuel_port",1,Integer::sum);
+                ceilingPorts++;
+            } else if (part.kind()==ReactorParts.Kind.ABSORBER) {
+                counts.merge("oritech:reactor_coolant_absorber_port",1,Integer::sum);
+                ceilingPorts++;
+            }
+        }
+        int outerW=width+2, outerL=length+2, outerH=height+2;
+        int shell=outerW*outerL*outerH-width*length*height;
+        int walls=Math.max(0,shell-ceilingPorts-1-energyPorts);
+        counts.merge("oritech:reactor_wall",walls,Integer::sum);
+        counts.merge("oritech:nuclear_reactor_controller",1,Integer::sum);
+        counts.merge("oritech:reactor_energy_port",energyPorts,Integer::sum);
+        return Map.copyOf(counts);
+    }
+}

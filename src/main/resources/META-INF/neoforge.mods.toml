@@ -1,0 +1,43 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+
+[[mods]]
+modId="just_enough_oritech"
+version="${mod_version}"
+displayName="Just Enough Oritech"
+authors="NiceClown"
+description='''
+Interactive Oritech nuclear reactor simulator and multiblock planner for JEI.
+'''
+
+[[dependencies.just_enough_oritech]]
+    modId="neoforge"
+    type="required"
+    versionRange="[26.1.2.64-beta,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.just_enough_oritech]]
+    modId="minecraft"
+    type="required"
+    versionRange="[26.1.2]"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.just_enough_oritech]]
+    modId="oritech"
+    type="required"
+    versionRange="[2.0.0-exp11,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.just_enough_oritech]]
+    modId="jei"
+    type="required"
+    versionRange="[29.0,)"
+    ordering="AFTER"
+    side="CLIENT"
+
+[[mixins]]
+config="just_enough_oritech.mixins.json"

@@ -1,0 +1,35 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = mod_version
+group = mod_group_id
+base { archivesName = mod_id }
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+repositories {
+    maven { url = 'https://maven.blamejared.com' }
+}
+
+neoForge {
+    version = project.neo_version
+    runs {
+        client { client() }
+        server { server(); programArgument '--nogui' }
+    }
+    mods { "${mod_id}" { sourceSet(sourceSets.main) } }
+}
+
+dependencies {
+    compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
+    runtimeOnly "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
+}
+
+tasks.named('processResources', ProcessResources) {
+    var props = [mod_version: mod_version]
+    inputs.properties props
+    filesMatching(['META-INF/neoforge.mods.toml']) { expand props }
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
