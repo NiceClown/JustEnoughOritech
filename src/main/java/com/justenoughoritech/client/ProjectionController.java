@@ -19,6 +19,7 @@ import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.neoforged.api.distmarker.Dist;
@@ -40,9 +41,11 @@ public final class ProjectionController {
             RenderSetup.builder(RenderPipelines.LINES_TRANSLUCENT)
                     .setOutputTarget(OutputTarget.MAIN_TARGET).createRenderSetup());
     private static final int OUTLINE_LIMIT = 5_000;
-    private static KeyMapping lockKey,cancelKey,openKey;
+    private static KeyMapping lockKey,cancelKey,rotateKey,openKey;
     private static boolean active,locked;
-    private static BlockPos lockedAnchor;
+    private static BlockHitResult lockedHit;
+    private static Rotation rotation=Rotation.NONE;
+    private static Rotation previewRotation;
     private static ClientLevel world;
     private static PrinterEntity printer;
     private static ReactorLayout preview;
@@ -52,7 +55,6 @@ public final class ProjectionController {
     private static BuildInspection manualInspection;
     private static boolean finishedInspection;
     private static long nextInspection;
-    private static int inspectedRevision = -1;
 
     private ProjectionController() {}
 
@@ -61,6 +63,7 @@ public final class ProjectionController {
         event.registerCategory(category);
         lockKey=register(event,"lock_projection",GLFW.GLFW_KEY_Y,category);
         cancelKey=register(event,"cancel_projection",GLFW.GLFW_KEY_N,category);
+        rotateKey=register(event,"rotate_projection",GLFW.GLFW_KEY_R,category);
         openKey=register(event,"open_simulator",GLFW.GLFW_KEY_J,category);
     }
 
@@ -75,7 +78,8 @@ public final class ProjectionController {
         world=client.level;
         active=true;
         locked=false;
-        lockedAnchor=null;
+        lockedHit=null;
+        rotation=Rotation.NONE;
         printer=null;
         preview=null;
         manualInspection=null;
@@ -86,7 +90,6 @@ public final class ProjectionController {
         begin();
         printer=source;
         locked=true;
-        lockedAnchor=source.anchor();
     }
 
     public static void offerPoweredPrinter(PrinterEntity source) {
@@ -96,35 +99,45 @@ public final class ProjectionController {
         previewPrinter(source);
     }
 
-    private static BlockPos aimedAnchor() {
+    private static BlockHitResult aimedFace() {
         var target=Minecraft.getInstance().hitResult;
-        return target instanceof BlockHitResult hit && hit.getType()==HitResult.Type.BLOCK
-                ? hit.getBlockPos().relative(hit.getDirection()) : null;
+        return target instanceof BlockHitResult hit && hit.getType()==HitResult.Type.BLOCK ? hit : null;
+    }
+
+    private static BlockPos manualOrigin(ReactorLayout layout) {
+        var hit=locked ? lockedHit : aimedFace();
+        return hit==null ? null : layout.buildOrigin(hit.getBlockPos().relative(hit.getDirection()),hit.getDirection(),rotation);
     }
 
     public static boolean handleProjectionKey(KeyEvent key,int action) {
         var mc=Minecraft.getInstance();
         if (!active || mc.level!=world || mc.screen!=null || lockKey==null || cancelKey==null) return false;
-        boolean confirm=lockKey.matches(key), cancel=cancelKey.matches(key);
-        if (!confirm && !cancel) return false;
+        boolean confirm=printer==null && lockKey.matches(key), cancel=cancelKey.matches(key);
+        boolean rotate=printer==null && !locked && rotateKey!=null && rotateKey.matches(key);
+        if (!confirm && !cancel && !rotate) return false;
         if (action==GLFW.GLFW_PRESS) {
             if (cancel) clear();
-            else if (printer==null) lock();
+            else if (confirm) lock();
+            else rotate();
         }
         return action!=GLFW.GLFW_RELEASE;
     }
 
     private static void lock() {
-        var target=aimedAnchor();
-        if(target!=null) {
-            lockedAnchor=target;
+        var hit=aimedFace();
+        if (hit!=null) {
+            lockedHit=hit;
             locked=true;
         }
     }
 
+    private static void rotate() {
+        rotation=rotation.getRotated(Rotation.CLOCKWISE_90);
+    }
+
     private static void clear() {
         active=locked=false;
-        lockedAnchor=null;
+        lockedHit=null;
         printer=null;
         preview=null;
         placements=List.of();
@@ -142,6 +155,7 @@ public final class ProjectionController {
             }
         }
         if (openKey!=null && openKey.consumeClick() && client.level!=null) JEIPlugin.openSimulator();
+        boolean requestedRotation=rotateKey!=null && rotateKey.consumeClick();
         if (!active) return;
         if (client.level!=world || (printer!=null && printer.isRemoved())) {
             clear();
@@ -150,33 +164,39 @@ public final class ProjectionController {
         // Also accepts programmatic clicks from other integrations.
         if (cancelKey!=null && cancelKey.consumeClick()) clear();
         if (active && printer==null && lockKey!=null && lockKey.consumeClick()) lock();
+        if (active && printer==null && !locked && client.screen==null && requestedRotation) rotate();
         if (active && printer==null) inspectManual(client.level);
-        if (active && !locked && client.screen==null && client.gui!=null && lockKey!=null && cancelKey!=null)
-            client.gui.setOverlayMessage(tr("aim",lockKey.getTranslatedKeyMessage(),cancelKey.getTranslatedKeyMessage()),false);
+        if (active && !locked && client.screen==null && client.gui!=null && lockKey!=null && cancelKey!=null && rotateKey!=null)
+            client.gui.setOverlayMessage(tr("aim",rotateKey.getTranslatedKeyMessage(),
+                    lockKey.getTranslatedKeyMessage(),cancelKey.getTranslatedKeyMessage()),false);
     }
 
     private static void inspectManual(ClientLevel level) {
-        var origin=locked ? lockedAnchor : aimedAnchor();
+        var origin=manualOrigin(Workbench.INSTANCE.layout);
         if (origin==null) {
             manualInspection=null;
             return;
         }
-        int currentRevision=Workbench.INSTANCE.revision();
-        if (preview!=Workbench.INSTANCE.layout || revision!=currentRevision) {
-            preview=Workbench.INSTANCE.layout;
-            revision=currentRevision;
-            placements=preview.placements();
-        }
-        if (manualInspection==null || !origin.equals(manualInspection.origin()) || inspectedRevision!=currentRevision
+        refreshManualPlacements();
+        if (manualInspection==null || !origin.equals(manualInspection.origin())
                 || (finishedInspection && level.getGameTime()>=nextInspection)) {
             manualInspection=new BuildInspection(placements,origin,0);
-            inspectedRevision=currentRevision;
             finishedInspection=false;
         }
         if (!finishedInspection && manualInspection.scan(level,2048,true)) {
             finishedInspection=true;
             nextInspection=level.getGameTime()+10;
         }
+    }
+
+    private static void refreshManualPlacements() {
+        var current=Workbench.INSTANCE;
+        if (preview==current.layout && revision==current.revision() && previewRotation==rotation) return;
+        preview=current.layout;
+        revision=current.revision();
+        previewRotation=rotation;
+        placements=preview.placements(rotation);
+        manualInspection=null;
     }
 
     private static boolean migrateKey(KeyMapping mapping,int oldDefault) {
@@ -187,8 +207,12 @@ public final class ProjectionController {
 
     static void sendToPrinter() {
         var mc=Minecraft.getInstance();
-        if (!active || !locked || lockedAnchor==null || printer!=null || mc.level!=world) {
+        if (!active || !locked || lockedHit==null || printer!=null || mc.level!=world) {
             mc.gui.setOverlayMessage(tr("printer_lock"),false);
+            return;
+        }
+        if (!(mc.level.getBlockEntity(lockedHit.getBlockPos()) instanceof PrinterEntity)) {
+            mc.gui.setOverlayMessage(tr("printer_attach"),false);
             return;
         }
         var layout=Workbench.INSTANCE.layout;
@@ -196,14 +220,19 @@ public final class ProjectionController {
             mc.gui.setOverlayMessage(tr("printer_invalid"),false);
             return;
         }
-        ClientPacketDistributor.sendToServer(new PrintRequest(lockedAnchor,PrinterLayout.from(layout)));
+        ClientPacketDistributor.sendToServer(new PrintRequest(lockedHit.getBlockPos(),lockedHit.getDirection(),
+                rotation,PrinterLayout.from(layout)));
     }
 
     @SubscribeEvent public static void render(RenderLevelStageEvent.AfterLevel event) {
         if (!active || Minecraft.getInstance().level!=world) return;
-        var anchor = printer!=null ? printer.anchor() : locked ? lockedAnchor : aimedAnchor();
         var selected = printer!=null ? printer.layout() : Workbench.INSTANCE.layout;
-        if (anchor==null || selected==null) return;
+        if (selected==null) return;
+        var anchor=printer!=null ? printer.anchor() : manualOrigin(selected);
+        if (anchor==null) return;
+        if (printer==null) refreshManualPlacements();
+        var selectedRotation=printer!=null ? printer.rotation() : rotation;
+        var blocks=printer!=null ? printer.placements() : placements;
         var camera=Minecraft.getInstance().gameRenderer.getMainCamera().position();
         var pose=event.getPoseStack();
         var buffers=Minecraft.getInstance().renderBuffers().bufferSource();
@@ -212,11 +241,11 @@ public final class ProjectionController {
         try {
             pose.mulPose(event.getModelViewMatrix());
             pose.translate(anchor.getX()-camera.x,anchor.getY()-camera.y,anchor.getZ()-camera.z);
-            int count=selected.blockCounts().values().stream().mapToInt(Integer::intValue).sum();
-            if (count>OUTLINE_LIMIT) {
-                box(out,pose.last(),0,0,0,selected.width()+2,selected.height()+2,selected.length()+2,0x9099DDF8);
+            if (blocks.size()>OUTLINE_LIMIT) {
+                box(out,pose.last(),0,0,0,selected.buildWidth(selectedRotation)+2,selected.height()+2,
+                        selected.buildLength(selectedRotation)+2,0x9099DDF8);
             } else {
-                drawBlocks(out,pose,selected);
+                drawBlocks(out,pose,blocks);
             }
             var obstruction=printer!=null
                     ? (printer.report()==null ? null : printer.report().obstruction())
@@ -228,13 +257,8 @@ public final class ProjectionController {
         }
     }
 
-    private static void drawBlocks(VertexConsumer out,PoseStack pose,ReactorLayout selected) {
-            if (preview!=selected || (printer==null && revision!=Workbench.INSTANCE.revision())) {
-                preview=selected;
-                revision=Workbench.INSTANCE.revision();
-                placements=selected.placements();
-            }
-            for (var block : placements) {
+    private static void drawBlocks(VertexConsumer out,PoseStack pose,List<ReactorLayout.Placement> blocks) {
+        for (var block : blocks) {
                 int color=switch (block.blockId()) {
                     case ReactorLayout.WALL -> 0x558ABAD8;
                     case ReactorLayout.CONTROLLER -> 0xD0FFD258;

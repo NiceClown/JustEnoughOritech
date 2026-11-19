@@ -10,24 +10,31 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenPosition;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.client.event.ScreenEvent;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntConsumer;
 
 public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListener {
     private static final int W = 420, H = 230, CELL = 17, GX = 6, GY = 40, GRID = 5;
     private static final int LIST_TOP = 165, LIST_HEIGHT = 59, LIST_ROWS = 5;
+    private static final int EYE_X=244, EYE_Y=29;
     private static final int LIGHT = 0xFFF1F3F5, MUTED = 0xFFB8C4D0, ALERT = 0xFFFF8176;
+    private static final int COOL=0xFF418C50, WARM=0xFFBE9D3D, HOT=0xFFFF414A, SELECTED=0xFFFFDA66;
+    private static final int WARM_THRESHOLD=65, HOT_THRESHOLD=100;
     private static final Workbench WB = Workbench.INSTANCE;
     private static final Identifier BUTTON = Identifier.withDefaultNamespace("widget/button");
     private static final Identifier HOVER = Identifier.withDefaultNamespace("widget/button_highlighted");
     private static final Identifier DISABLED = Identifier.withDefaultNamespace("widget/button_disabled");
+    private static GridViewport gridViewport;
     private final float scale;
     private final TextViewport textViewport = new TextViewport();
     private int previewRevision = -1;
@@ -35,6 +42,10 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
     private List<ReactorLayout.Placement> blueprint = List.of();
     private List<ReactorLayout.Placement> preview = List.of();
     private boolean draggingBar;
+
+    private record GridViewport(Screen screen,double left,double top,double right,double bottom) {
+        boolean contains(double x,double y) { return x>=left && x<right && y>=top && y<bottom; }
+    }
 
     public SimulatorWidget() { this(displayScale()); }
     SimulatorWidget(float scale) { this.scale = scale; }
@@ -61,16 +72,32 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         pose.pushMatrix();
         pose.scale(scale);
         try {
+            gridViewport=new GridViewport(Minecraft.getInstance().screen,
+                    pose.m20()+GX*pose.m00(),pose.m21()+GY*pose.m11(),
+                    pose.m20()+(GX+GRID*CELL)*pose.m00(),pose.m21()+(GY+GRID*CELL)*pose.m11());
             graphics.enableScissor(0,0,W,H);
             try {
                 drawEditor(graphics);
                 for (var button : buttons()) button.draw(graphics,textViewport,mouseX/scale,mouseY/scale);
+                drawEye(graphics);
             } finally {
                 graphics.disableScissor();
             }
         } finally {
             pose.popMatrix();
         }
+    }
+
+    static void clearGridViewport(ScreenEvent.Render.Pre event) {
+        gridViewport=null;
+    }
+
+    static void handleGridScroll(ScreenEvent.MouseScrolled.Pre event) {
+        var viewport=gridViewport;
+        // JEI handles category navigation before it offers the wheel to recipe widgets.
+        if (viewport!=null && event.getScreen()==viewport.screen()
+                && viewport.contains(event.getMouseX(),event.getMouseY())
+                && panGrid(event.getScrollDeltaX(),event.getScrollDeltaY())) event.setCanceled(true);
     }
 
     private void drawEditor(GuiGraphicsExtractor g) {
@@ -87,7 +114,8 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
             case UNVERIFIED -> Component.empty().append(tr("unverified")).append(" ").append(snapshot.oritechVersion());
             case INCOMPATIBLE -> tr("incompatible", issueText(ClientRuntimeConfig.runtimeIssue()));
         };
-        text(g,4,16,410,status, compatibility == ClientRuntimeConfig.Compatibility.VERIFIED ? 0xFF89D39D : ALERT);
+        text(g,4,16,128,status, compatibility == ClientRuntimeConfig.Compatibility.VERIFIED ? 0xFF89D39D : ALERT);
+        drawHeatLegend(g);
 
         text(g,GX,30,96,tr("interior",WB.layout.width(),WB.layout.length()),LIGHT);
         drawGrid(g);
@@ -96,7 +124,11 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         text(g,GX,192,96,tr("layer_number",WB.selectedLayer+1,WB.layout.height()),MUTED);
         text(g,GX,203,96,tr("ports",WB.layout.energyPorts()),MUTED);
 
-        text(g,110,31,148,tr(WB.layersMode ? "preview_layer" : "preview_3d"),LIGHT);
+        text(g,110,31,128,tr(WB.layersMode ? "preview_layer" : "preview_3d"),LIGHT);
+        int editWidth=Math.min(GRID,WB.layout.width()-WB.gridOffsetX);
+        int editLength=Math.min(GRID,WB.layout.length()-WB.gridOffsetZ);
+        text(g,110,43,148,tr("edit_area_coords",WB.gridOffsetX+1,WB.gridOffsetX+editWidth,
+                WB.gridOffsetZ+1,WB.gridOffsetZ+editLength),MUTED);
         int layer = WB.layersMode ? WB.selectedLayer+1 : -1;
         if (previewRevision != WB.revision()) {
             blueprint = WB.layout.placements();
@@ -105,11 +137,13 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         }
         if (previewLayer != layer) {
             previewLayer = layer;
-            preview = blueprint.stream().filter(block -> layer >= 0 ? block.y()==layer
-                    : block.x()==0 || block.x()==WB.layout.width()+1 || block.z()==0
-                    || block.z()==WB.layout.length()+1 || block.y()==0 || block.y()==WB.layout.height()+1).toList();
+            preview = layer>=0 ? blueprint.stream().filter(block -> block.y()==layer).toList()
+                    : AssemblyPreview.shell(blueprint,WB.layout.width(),WB.layout.height(),WB.layout.length());
         }
-        AssemblyPreview.draw(g,preview,WB.layout,layer,109,43,150,112);
+        var editArea=WB.showEditArea ? new AssemblyPreview.EditArea(WB.gridOffsetX+1,WB.gridOffsetZ+1,
+                editWidth,editLength,WB.selectedLayer+2) : null;
+        AssemblyPreview.draw(g,preview,WB.layout.width(),WB.layout.height(),WB.layout.length(),layer,WB.simulation,
+                editArea,AssemblyPreview.DEFAULT_PITCH,AssemblyPreview.DEFAULT_YAW,109,53,150,102);
         text(g,110,157,148,tr("heat_history"),MUTED);
         drawHeatGraph(g);
         if (WB.designStatus != null) paragraph(g,110,190,148,2,WB.designStatus,MUTED);
@@ -142,13 +176,34 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
                 g.fill(px,py,px+CELL-1,py+CELL-1,heatColor(WB.simulation.cell(cx,cz).heat));
             var part = WB.layout.get(cx,cz);
             if (part.block() != null) g.fakeItem(new ItemStack(part.block()),px,py);
-            if (cx == WB.cursorX && cz == WB.cursorZ) g.outline(px,py,CELL-1,CELL-1,0xFFFFDA66);
+            if (cx == WB.cursorX && cz == WB.cursorZ) g.outline(px,py,CELL-1,CELL-1,SELECTED);
         }
     }
 
-    private int heatColor(int heat) {
-        float f = Math.clamp(heat/(float)Math.max(1,ClientRuntimeConfig.config().maxHeat()),0f,1f);
-        return 0xFF000000 | ((int)(65+190*f)<<16) | ((int)(140-95*f)<<8) | (int)(80-40*f);
+    private void drawHeatLegend(GuiGraphicsExtractor g) {
+        var font=Minecraft.getInstance().font;
+        var label=tr("heat_legend");
+        int x=134;
+        g.text(font,label,x,16,MUTED,false);
+        x+=font.width(label)+7;
+        x=legendEntry(g,x,COOL,tr("heat_legend_cool",WARM_THRESHOLD),false);
+        x=legendEntry(g,x,WARM,tr("heat_legend_warm",WARM_THRESHOLD,HOT_THRESHOLD),false);
+        x=legendEntry(g,x,HOT,tr("heat_legend_hot",HOT_THRESHOLD),false);
+        legendEntry(g,x,SELECTED,tr("heat_legend_selected"),true);
+    }
+
+    private int legendEntry(GuiGraphicsExtractor g,int x,int color,Component label,boolean outline) {
+        if (outline) g.outline(x,16,7,7,color);
+        else g.fill(x,16,x+7,23,color);
+        int width=Minecraft.getInstance().font.width(label);
+        text(g,x+10,16,Math.min(width,414-x-10),label,MUTED);
+        return x+width+18;
+    }
+
+    static int heatColor(int heat) {
+        long maximum=Math.max(1,ClientRuntimeConfig.config().maxHeat());
+        long scaled=(long)heat*100;
+        return scaled>=maximum*HOT_THRESHOLD ? HOT : scaled>=maximum*WARM_THRESHOLD ? WARM : COOL;
     }
 
     private void drawHeatGraph(GuiGraphicsExtractor g) {
@@ -189,7 +244,15 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
             default -> sim.unstableTicks() > 0 ? tr("failure",sim.ticksToMeltdown()) : tr("no_risk");
         };
         text(g,270,193,143,risk,sim.unstableTicks()>0 ? ALERT : MUTED);
-        text(g,270,207,143,tr("consumption",sim.fuelItems(),sim.coolantItems()),MUTED);
+        drawConsumption(g,205,"fuel",sim.fuelItems());
+        drawConsumption(g,217,"coolant",sim.coolantItems());
+    }
+
+    private void drawConsumption(GuiGraphicsExtractor g,int y,String resource,int count) {
+        var font=Minecraft.getInstance().font;
+        String amount=Integer.toString(count);
+        g.text(font,tr(resource),270,y,MUTED);
+        g.text(font,amount,412-font.width(amount),y,LIGHT);
     }
 
     private static Component issueText(String issue) {
@@ -232,7 +295,28 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         WB.blockOffset = max == 0 ? 0 : Math.clamp((int)Math.round((y-LIST_TOP-height/2d)*max/(LIST_HEIGHT-height)),0,max);
     }
 
-    private record Control(int x,int y,int w,int h,Component label,boolean enabled,Runnable action) {
+    private void drawEye(GuiGraphicsExtractor g) {
+        int x=EYE_X+3,y=EYE_Y+3;
+        g.fill(x+2,y,x+6,y+1,LIGHT);
+        g.fill(x+1,y+1,x+7,y+2,LIGHT);
+        g.fill(x,y+2,x+2,y+4,LIGHT);
+        g.fill(x+3,y+2,x+5,y+4,LIGHT);
+        g.fill(x+6,y+2,x+8,y+4,LIGHT);
+        g.fill(x+1,y+4,x+7,y+5,LIGHT);
+        g.fill(x+2,y+5,x+6,y+6,LIGHT);
+        if (!WB.showEditArea) {
+            for (int i=0;i<8;i++) {
+                g.fill(x+i,y+6-i,x+i+1,y+8-i,0xFF293039);
+                g.fill(x+i,y+6-i,x+i+1,y+7-i,LIGHT);
+            }
+        }
+    }
+
+    private record Control(int x,int y,int w,int h,Component label,Component tooltip,boolean enabled,Runnable action,
+                           boolean variableStep) {
+        Control(int x,int y,int w,int h,Component label,Component tooltip,boolean enabled,Runnable action) {
+            this(x,y,w,h,label,tooltip,enabled,action,false);
+        }
         boolean at(double mx,double my) { return mx>=x && mx<x+w && my>=y && my<y+h; }
         void draw(GuiGraphicsExtractor g,TextViewport viewport,double mx,double my) {
             g.blitSprite(RenderPipelines.GUI_TEXTURED,!enabled ? DISABLED : at(mx,my) ? HOVER : BUTTON,x,y,w,h);
@@ -241,44 +325,53 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
     }
 
     private Control control(int x,int y,int width,String key,Runnable action) {
-        return new Control(x,y,width,14,tr(key),true,action);
+        return new Control(x,y,width,14,tr(key),tr("control."+key),true,action);
     }
 
-    private Control arrow(int x,int y,String label,Runnable action) {
-        return new Control(x,y,16,14,Component.literal(label),true,action);
+    private Control arrow(int x,int y,String label,String actionKey,Runnable action) {
+        return new Control(x,y,16,14,Component.literal(label),tr("control."+actionKey),true,action);
+    }
+
+    private Control stepControl(int x,int y,String key,IntConsumer action) {
+        return new Control(x,y,22,14,tr(key),tr("control."+key),true,() -> {
+            var mc=Minecraft.getInstance();
+            action.accept(mc.hasControlDown() ? 50 : mc.hasShiftDown() ? 10 : 1);
+        },true);
     }
 
     private List<Control> buttons() {
         var controls = new ArrayList<Control>();
-        controls.add(control(6,139,22,"width_minus",() -> resize(-1,0)));
-        controls.add(control(29,139,22,"width_plus",() -> resize(1,0)));
-        controls.add(control(52,139,22,"length_minus",() -> resize(0,-1)));
-        controls.add(control(75,139,22,"length_plus",() -> resize(0,1)));
-        controls.add(control(6,155,22,"height_minus",() -> height(-1)));
-        controls.add(control(29,155,22,"height_plus",() -> height(1)));
+        controls.add(stepControl(6,139,"width_minus",step -> resize(-step,0)));
+        controls.add(stepControl(29,139,"width_plus",step -> resize(step,0)));
+        controls.add(stepControl(52,139,"length_minus",step -> resize(0,-step)));
+        controls.add(stepControl(75,139,"length_plus",step -> resize(0,step)));
+        controls.add(stepControl(6,155,"height_minus",step -> height(-step)));
+        controls.add(stepControl(29,155,"height_plus",this::height));
         controls.add(control(52,155,45,WB.layersMode ? "assembly" : "layer",() -> WB.layersMode = !WB.layersMode));
-        controls.add(arrow(6,173,"<",() -> WB.cyclePart(-1)));
-        controls.add(arrow(24,173,">",() -> WB.cyclePart(1)));
+        controls.add(arrow(6,173,"<","part_previous",() -> WB.cyclePart(-1)));
+        controls.add(arrow(24,173,">","part_next",() -> WB.cyclePart(1)));
         controls.add(control(43,173,54,"ghost",ProjectionController::begin));
-        controls.add(arrow(6,213,"<",() -> layer(-1)));
-        controls.add(arrow(24,213,">",() -> layer(1)));
-        controls.add(control(51,213,22,"port_minus",() -> ports(-1)));
-        controls.add(control(75,213,22,"port_plus",() -> ports(1)));
-        controls.add(arrow(270,50,"<",() -> fuel(-1)));
-        controls.add(arrow(396,50,">",() -> fuel(1)));
-        controls.add(arrow(270,99,"<",() -> coolant(-1)));
-        controls.add(arrow(396,99,">",() -> coolant(1)));
+        controls.add(arrow(6,213,"<","layer_previous",() -> layer(-1)));
+        controls.add(arrow(24,213,">","layer_next",() -> layer(1)));
+        controls.add(stepControl(51,213,"port_minus",step -> ports(-step)));
+        controls.add(stepControl(75,213,"port_plus",this::ports));
+        controls.add(new Control(EYE_X,EYE_Y,14,13,Component.empty(),
+                tr(WB.showEditArea ? "edit_area_hide" : "edit_area_show"),true,() -> WB.showEditArea=!WB.showEditArea));
+        controls.add(arrow(270,50,"<","fuel_previous",() -> fuel(-1)));
+        controls.add(arrow(396,50,">","fuel_next",() -> fuel(1)));
+        controls.add(arrow(270,99,"<","coolant_previous",() -> coolant(-1)));
+        controls.add(arrow(396,99,">","coolant_next",() -> coolant(1)));
         boolean ready = WB.inputs.available() && ClientRuntimeConfig.compatibility() != ClientRuntimeConfig.Compatibility.INCOMPATIBLE;
-        controls.add(new Control(270,124,42,14,tr(WB.running?"pause":"run"),ready,() -> {
+        controls.add(new Control(270,124,42,14,tr(WB.running?"pause":"run"),tr(WB.running?"control.pause":"control.run"),ready,() -> {
             if (WB.running) WB.pause(); else WB.start();
         }));
         controls.add(control(314,124,46,"reset",WB::reset));
         controls.add(control(362,124,51,WB.blocksMode?"results":"blocks",() -> WB.blocksMode = !WB.blocksMode));
-        controls.add(new Control(110,209,65,16,tr("auto"),ready&&!WB.designing(),() -> {
+        controls.add(new Control(110,209,65,16,tr("auto"),tr("control.auto"),ready&&!WB.designing(),() -> {
             var mc=Minecraft.getInstance();
             mc.setScreen(new AutoDesignScreen(mc.screen));
         }));
-        controls.add(new Control(177,209,81,16,tr("print_short"),ready,ProjectionController::sendToPrinter));
+        controls.add(new Control(177,209,81,16,tr("print_short"),tr("control.print"),ready,ProjectionController::sendToPrinter));
         return controls;
     }
 
@@ -310,7 +403,12 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         double x = mx/scale, y = my/scale;
         for (var button : buttons()) {
             if (!button.at(x,y)) continue;
-            tooltip.add(button.x()==177 && button.y()==209 ? tr("print") : button.label());
+            tooltip.add(button.tooltip());
+            if (button.variableStep()) tooltip.add(tr("control.step"));
+            return;
+        }
+        if (x>=134 && x<414 && y>=15 && y<25) {
+            tooltip.add(tr("heat_legend_tip",ClientRuntimeConfig.config().maxHeat()));
             return;
         }
         if (grid(x,y)) {
@@ -380,17 +478,25 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
 
     @Override public boolean mouseScrolled(double mx,double my,double dx,double dy) {
         double x=mx/scale,y=my/scale;
-        int delta=dy<0 ? 1 : -1;
         if (grid(x,y)) {
-            if (Minecraft.getInstance().hasShiftDown()) WB.gridOffsetX=Math.clamp(WB.gridOffsetX+delta,0,Math.max(0,WB.layout.width()-GRID));
-            else WB.gridOffsetZ=Math.clamp(WB.gridOffsetZ+delta,0,Math.max(0,WB.layout.length()-GRID));
-            return true;
+            return panGrid(dx,dy);
         }
-        if (list(x,y)) {
+        if (list(x,y) && dy!=0) {
+            int delta=dy<0 ? 1 : -1;
             WB.blockOffset = Math.clamp(WB.blockOffset+delta,0,Math.max(0,blockList().size()-LIST_ROWS));
             return true;
         }
         return false;
+    }
+
+    private static boolean panGrid(double dx,double dy) {
+        if (dx==0 && dy==0) return false;
+        boolean horizontalWheel=Math.abs(dx)>Math.abs(dy);
+        int delta=(horizontalWheel ? dx : dy)<0 ? 1 : -1;
+        if (horizontalWheel || Minecraft.getInstance().hasShiftDown())
+            WB.gridOffsetX=Math.clamp(WB.gridOffsetX+delta,0,Math.max(0,WB.layout.width()-GRID));
+        else WB.gridOffsetZ=Math.clamp(WB.gridOffsetZ+delta,0,Math.max(0,WB.layout.length()-GRID));
+        return true;
     }
 
     @Override public void tick() { WB.tick(); }

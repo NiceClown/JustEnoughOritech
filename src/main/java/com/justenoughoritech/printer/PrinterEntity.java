@@ -20,6 +20,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
@@ -46,6 +47,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     private UUID owner;
     private PrinterLayout blueprint;
     private ReactorLayout layout;
+    private Rotation rotation=Rotation.NONE;
     private List<ReactorLayout.Placement> placements = List.of();
     private BlockPos origin;
     private int dx,dy,dz,cursor;
@@ -68,6 +70,8 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     boolean available(ServerPlayer player) { return (owner==null || owner.equals(player.getUUID())) && (blueprint==null || state==COMPLETE); }
     boolean authorized(Player player) { return owner==null || owner.equals(player.getUUID()); }
     public ReactorLayout layout() { return layout; }
+    public Rotation rotation() { return rotation; }
+    public List<ReactorLayout.Placement> placements() { return placements; }
     public BlockPos anchor() { return origin == null ? null : origin.offset(dx,dy,dz); }
     public PrinterReport report() { return report; }
     public void setReport(PrinterReport update) {
@@ -78,16 +82,19 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     int stateId() { return state; }
     int offset(int axis) { return switch(axis) { case 0 -> dx; case 1 -> dy; default -> dz; }; }
 
-    public boolean accept(ServerPlayer player,PrinterLayout plan,BlockPos target) {
+    boolean accept(ServerPlayer player,PrinterLayout plan,Direction face,Rotation rotation) {
         if (!(level instanceof ServerLevel server) || !available(player) || !server.mayInteract(player,worldPosition)
-                || !worldPosition.closerThan(target,MAX_BUILD_DISTANCE)) return false;
+                || !worldPosition.closerToCenterThan(player.position(),RANGE)) return false;
         var settings = ServerConfigReader.read(server.getServer());
         var checked = settings.compatible() ? plan.resolve(settings.maxSize()) : null;
-        if (checked==null || !fits(server,target,checked)) return false;
+        if (checked==null) return false;
+        var target=checked.buildOrigin(worldPosition.relative(face),face,rotation);
+        if (!fits(server,target,checked,rotation)) return false;
         owner=player.getUUID();
         blueprint=plan;
         layout=checked;
-        placements=checked.placements();
+        this.rotation=rotation;
+        placements=checked.placements(rotation);
         origin=target;
         dx=dy=dz=cursor=0;
         state=WAITING;
@@ -102,6 +109,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
             blueprint=null;
             owner=null;
             layout=null;
+            rotation=Rotation.NONE;
             origin=null;
             placements=List.of();
             cursor=state=dx=dy=dz=0;
@@ -115,16 +123,16 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         int nextY=Math.clamp(dy+(axis==1?step:0),-SHIFT,SHIFT);
         int nextZ=Math.clamp(dz+(axis==2?step:0),-SHIFT,SHIFT);
         var target=origin.offset(nextX,nextY,nextZ);
-        if (!worldPosition.closerThan(target,MAX_BUILD_DISTANCE) || !fits(server,target,layout)) return false;
+        if (!worldPosition.closerThan(target,MAX_BUILD_DISTANCE) || !fits(server,target,layout,rotation)) return false;
         dx=nextX; dy=nextY; dz=nextZ;
         resetInspection();
         sync();
         return true;
     }
 
-    private boolean fits(ServerLevel level,BlockPos target,ReactorLayout shape) {
+    private boolean fits(ServerLevel level,BlockPos target,ReactorLayout shape,Rotation rotation) {
         if (shape==null || !level.isInWorldBounds(target)) return false;
-        var far=target.offset(shape.width()+1,shape.height()+1,shape.length()+1);
+        var far=target.offset(shape.buildWidth(rotation)+1,shape.height()+1,shape.buildLength(rotation)+1);
         var area=level.getWorldBorder();
         return level.isInWorldBounds(far) && area.isWithinBounds(target) && area.isWithinBounds(far);
     }
@@ -204,8 +212,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     }
 
     private BlockState oriented(BlockState state,ReactorLayout.Placement block) {
-        var facing = block.x()==0 ? Direction.WEST : block.x()==layout.width()+1 ? Direction.EAST
-                : block.z()==0 ? Direction.NORTH : Direction.SOUTH;
+        var facing=ReactorLayout.wallFacing(block,layout.buildWidth(rotation));
         if (state.hasProperty(BlockStateProperties.HORIZONTAL_FACING))
             return state.setValue(BlockStateProperties.HORIZONTAL_FACING,facing);
         if (state.hasProperty(BlockStateProperties.FACING)
@@ -301,6 +308,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         output.storeNullable("owner",UUIDUtil.CODEC,owner);
         output.storeNullable("blueprint",PrinterLayout.CODEC,blueprint);
         output.storeNullable("origin",BlockPos.CODEC,origin);
+        if (rotation!=Rotation.NONE) output.store("rotation",Rotation.CODEC,rotation);
         output.putInt("dx",dx); output.putInt("dy",dy); output.putInt("dz",dz);
         output.putInt("progress",cursor);
     }
@@ -311,11 +319,12 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         owner=input.read("owner",UUIDUtil.CODEC).orElse(null);
         blueprint=input.read("blueprint",PrinterLayout.CODEC).orElse(null);
         origin=input.read("origin",BlockPos.CODEC).orElse(null);
+        rotation=input.read("rotation",Rotation.CODEC).orElse(Rotation.NONE);
         dx=Math.clamp(input.getIntOr("dx",0),-SHIFT,SHIFT);
         dy=Math.clamp(input.getIntOr("dy",0),-SHIFT,SHIFT);
         dz=Math.clamp(input.getIntOr("dz",0),-SHIFT,SHIFT);
         layout=blueprint==null || origin==null ? null : blueprint.resolve(PrinterLayout.LIMIT);
-        placements=layout==null ? List.of() : layout.placements();
+        placements=layout==null ? List.of() : layout.placements(rotation);
         cursor=Math.clamp(input.getIntOr("progress",0),0,placements.size());
         state=layout==null ? IDLE : cursor==placements.size() ? COMPLETE : WAITING;
     }

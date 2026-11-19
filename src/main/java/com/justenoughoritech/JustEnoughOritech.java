@@ -37,7 +37,7 @@ public final class JustEnoughOritech {
     }
 
     private void registerPayloads(RegisterPayloadHandlersEvent event) {
-        var registrar=event.registrar("0.3.3");
+        var registrar=event.registrar("0.4.0");
         registrar.playToClient(ReactorConfigPayload.TYPE, ReactorConfigPayload.STREAM_CODEC,
                 ReactorConfigPayload::handleClient);
         registrar.playToClient(com.justenoughoritech.printer.PrinterReport.TYPE,

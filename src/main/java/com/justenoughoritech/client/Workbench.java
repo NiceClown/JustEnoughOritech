@@ -20,6 +20,7 @@ public final class Workbench {
     public int gridOffsetX, gridOffsetZ, blockOffset;
     public int cursorX, cursorZ;
     public boolean layersMode, running, blocksMode;
+    public boolean showEditArea=true;
     public ReactorSimulation simulation;
     public String issue;
     public int speed = 1;

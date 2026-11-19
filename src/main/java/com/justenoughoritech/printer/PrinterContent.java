@@ -3,6 +3,12 @@ package com.justenoughoritech.printer;
 import com.justenoughoritech.JustEnoughOritech;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -10,6 +16,8 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.function.Supplier;
+import java.util.function.Consumer;
+import java.util.List;
 
 public final class PrinterContent {
     private static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(JustEnoughOritech.MOD_ID);
@@ -27,8 +35,22 @@ public final class PrinterContent {
                             new PrinterMenu(id,inventory,buf.readBlockPos()), FeatureFlags.DEFAULT_FLAGS));
 
     private PrinterContent() {}
+    public static List<Component> instructions() {
+        String key="gui.just_enough_oritech.printer_help.";
+        return List.of(Component.translatable(key+"preview"),Component.translatable(key+"attach"),
+                Component.translatable(key+"keys",Component.keybind("key.just_enough_oritech.rotate_projection"),
+                        Component.keybind("key.just_enough_oritech.lock_projection")),
+                Component.translatable(key+"send"),Component.translatable(key+"power"));
+    }
+
     public static void register(IEventBus bus) {
-        ITEMS.registerSimpleBlockItem(PRINTER);
+        ITEMS.registerItem("reactor_printer",props -> new BlockItem(PRINTER.get(),props.useBlockDescriptionPrefix()) {
+            @Override public void appendHoverText(ItemStack stack,Item.TooltipContext context,TooltipDisplay display,
+                                                  Consumer<Component> lines,TooltipFlag flags) {
+                super.appendHoverText(stack,context,display,lines,flags);
+                instructions().forEach(line -> lines.accept(line.copy().withStyle(net.minecraft.ChatFormatting.GRAY)));
+            }
+        });
         bus.addListener((net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) -> {
             if (event.getTabKey().equals(net.minecraft.world.item.CreativeModeTabs.REDSTONE_BLOCKS)) event.accept(PRINTER);
         });

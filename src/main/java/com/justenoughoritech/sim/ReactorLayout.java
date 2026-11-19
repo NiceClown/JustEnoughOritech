@@ -1,5 +1,9 @@
 package com.justenoughoritech.sim;
 
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.block.Rotation;
+
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -62,6 +66,47 @@ public final class ReactorLayout {
     public static final String ENERGY_PORT = "oritech:reactor_energy_port";
 
     public record Placement(int x, int y, int z, String blockId) {}
+
+    public int buildWidth(Rotation rotation) {
+        return rotation.rotate(Direction.EAST).getAxis()==Direction.Axis.X ? width : length;
+    }
+
+    public int buildLength(Rotation rotation) {
+        return rotation.rotate(Direction.SOUTH).getAxis()==Direction.Axis.Z ? length : width;
+    }
+
+    /** Keep the aimed corner fixed while finding the minimum world coordinates of the rotated build. */
+    public BlockPos buildOrigin(BlockPos corner,Direction face,Rotation rotation) {
+        int y=face==Direction.DOWN ? -height-1 : 0;
+        return switch (rotation) {
+            case NONE -> corner.offset(0,y,0);
+            case CLOCKWISE_90 -> corner.offset(-length-1,y,0);
+            case CLOCKWISE_180 -> corner.offset(-width-1,y,-length-1);
+            case COUNTERCLOCKWISE_90 -> corner.offset(0,y,-width-1);
+        };
+    }
+
+    public List<Placement> placements(Rotation rotation) {
+        var base=placements();
+        if (rotation==Rotation.NONE) return base;
+        // Preserve the build order across rotations so obstruction checks and printing agree.
+        return base.stream().map(block -> switch (rotation) {
+            case CLOCKWISE_90 -> new Placement(length+1-block.z(),block.y(),block.x(),block.blockId());
+            case CLOCKWISE_180 -> new Placement(width+1-block.x(),block.y(),length+1-block.z(),block.blockId());
+            case COUNTERCLOCKWISE_90 -> new Placement(block.z(),block.y(),width+1-block.x(),block.blockId());
+            case NONE -> block;
+        }).toList();
+    }
+
+    public static boolean onShell(Placement block,int width,int height,int length) {
+        return block.x()==0 || block.x()==width+1 || block.y()==0 || block.y()==height+1
+                || block.z()==0 || block.z()==length+1;
+    }
+
+    public static Direction wallFacing(Placement block,int width) {
+        return block.x()==0 ? Direction.WEST : block.x()==width+1 ? Direction.EAST
+                : block.z()==0 ? Direction.NORTH : Direction.SOUTH;
+    }
 
     /** The origin is the outside bottom corner with the smallest X and Z. */
     public List<Placement> placements() {
