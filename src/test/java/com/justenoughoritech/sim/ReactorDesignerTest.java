@@ -83,6 +83,19 @@ class ReactorDesignerTest {
     }
 
     @Test
+    void findsLargerTarget() {
+        var layout = new ReactorLayout();
+        layout.resize(9, 9, 66);
+        layout.setHeight(3, 66);
+        var result = ReactorDesigner.find(layout, ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY,
+                request(10_000, true));
+        assertNotNull(result.safe(), "expected a stable design");
+        assertTrue(result.safe().exportRate() >= 10_000,
+                "expected at least 10000 RF/t, got " + result.safe().exportRate());
+    }
+
+    @Test
     void cautiousDesignRespectsHeatBudget() {
         var cautious = new ReactorDesigner.Request(0, ReactorDesigner.Risk.CAUTIOUS,
                 Set.of("test:single", "test:double", "test:quad"), false,

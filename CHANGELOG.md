@@ -34,7 +34,7 @@ This test release fixes the issues found in the 0.5.0 planner review. It focuses
 
 ### Build and tests
 
-- Added seven planner/simulation regression tests covering stable design search, a 2000 RF/t target, cautious heat limits, wide layouts, cancellation, missing cooling components and fast passive stabilisation. All tests pass.
+- Added eight planner/simulation regression tests covering stable design search, 2000 and 10,000 RF/t targets, cautious heat limits, wide layouts, cancellation, missing cooling components and fast passive stabilisation. All tests pass.
 - The build now has a test source set wired to the main NeoForge classpath and JUnit 5.
 
 ### Compatibility
