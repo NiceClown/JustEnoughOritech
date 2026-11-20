@@ -3,8 +3,11 @@ package com.justenoughoritech.client;
 import com.justenoughoritech.network.ReactorConfigPayload;
 import com.justenoughoritech.sim.ReactorConfig;
 
+import java.util.Set;
+
 public final class ClientRuntimeConfig {
     public enum Compatibility { WAITING, VERIFIED, UNVERIFIED, INCOMPATIBLE }
+    private static final Set<String> VERIFIED_VERSIONS = Set.of("2.0.0-exp12", "2.0.0-exp14");
     private static volatile ReactorConfigPayload snapshot;
     private static volatile Boolean runtimeCompatible;
     private static volatile String runtimeIssue;
@@ -22,7 +25,7 @@ public final class ClientRuntimeConfig {
     public static Compatibility compatibility() {
         if (snapshot == null) return Compatibility.WAITING;
         if (!snapshot.compatible() || Boolean.FALSE.equals(runtimeCompatible)) return Compatibility.INCOMPATIBLE;
-        return "2.0.0-exp12".equals(snapshot.oritechVersion()) ? Compatibility.VERIFIED : Compatibility.UNVERIFIED;
+        return VERIFIED_VERSIONS.contains(snapshot.oritechVersion()) ? Compatibility.VERIFIED : Compatibility.UNVERIFIED;
     }
     public static ReactorConfig config() {
         if (snapshot == null || !snapshot.compatible()) return ReactorConfig.DEFAULT;
@@ -30,5 +33,5 @@ public final class ClientRuntimeConfig {
                 snapshot.ventRelativeRate(), snapshot.maxHeat(), snapshot.maxUnstableTicks(),
                 snapshot.outputPerPort(), snapshot.safeMode(), snapshot.safeModeCooldown());
     }
-    public static String latestCompatible() { return "2.0.0-exp12"; }
+    public static String latestCompatible() { return "2.0.0-exp14"; }
 }

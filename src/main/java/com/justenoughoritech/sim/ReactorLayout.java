@@ -156,7 +156,7 @@ public final class ReactorLayout {
         if (rods==0) errors.add("gui.just_enough_oritech.need_rod");
         if (energyPorts<1) errors.add("gui.just_enough_oritech.need_energy");
         if (energyPorts>maxEnergyPorts(width,length,height)) errors.add("gui.just_enough_oritech.port_space");
-        if (topPorts >= (width+2)*(length+2)) errors.add("gui.just_enough_oritech.ceiling_space");
+        if (topPorts > width*length) errors.add("gui.just_enough_oritech.ceiling_space");
         return List.copyOf(errors);
     }
 

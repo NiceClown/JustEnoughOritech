@@ -5,7 +5,7 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Map;
 
-/** Fingerprints the exp12 classes that define reactor heat, pulses and resource timing. */
+/** Fingerprints the reactor classes shared by Oritech 2.0.0-exp12 and 2.0.0-exp14 (heat, pulses and resource timing). */
 public final class PhysicsCompatibility {
     private static final Map<String,String> EXP12=Map.ofEntries(
             Map.entry("rearth/oritech/block/entity/reactor/NuclearReactorControllerBlockEntity.class","10ca6782cbb23c784f3b226b1f0f69ca8014c1743bede8eb38ddc438a06a9453"),

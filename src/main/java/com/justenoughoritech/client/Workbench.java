@@ -7,9 +7,18 @@ import com.justenoughoritech.sim.ReactorSimulation;
 import com.justenoughoritech.sim.ReactorDesigner;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class Workbench {
     public static final Workbench INSTANCE = new Workbench();
+    private static final ExecutorService AUTO_DESIGN_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "JustEnoughOritech Auto Design");
+        thread.setDaemon(true);
+        return thread;
+    });
     public final ReactorLayout layout = new ReactorLayout();
     public List<ReactorParts.Part> parts = List.of(ReactorParts.Part.EMPTY);
     public ReactorInputs inputs = new ReactorInputs(List.of(), List.of(), "Waiting for server recipes");
@@ -27,6 +36,9 @@ public final class Workbench {
     private boolean partsLoaded;
     private int revision;
     private boolean designing;
+    private CompletableFuture<ReactorDesigner.Result> autoDesignFuture;
+    private AtomicBoolean autoDesignCancelled;
+    private long autoDesignGeneration;
     public ReactorDesigner.Request lastRequest;
     public net.minecraft.network.chat.Component designStatus;
     public int revision() { return revision; }
@@ -122,9 +134,10 @@ public final class Workbench {
 
     public void autoDesign(ReactorDesigner.Request request,
                            java.util.function.Consumer<ReactorDesigner.Result> onResult) {
+        cancelAutoDesign();
         refreshParts();
         refreshInputs();
-        if (designing || !inputs.available()
+        if (!inputs.available()
                 || ClientRuntimeConfig.compatibility()==ClientRuntimeConfig.Compatibility.INCOMPATIBLE) {
             onResult.accept(null);
             return;
@@ -137,15 +150,35 @@ public final class Workbench {
         var fuel=inputs.fuels().get(Math.floorMod(selectedFuel,inputs.fuels().size()));
         var coolant=inputs.coolants().get(Math.floorMod(selectedCoolant,inputs.coolants().size()));
         int expectedRevision=revision;
+        var cancelled=new AtomicBoolean();
+        long generation=++autoDesignGeneration;
         lastRequest=request;
         designing=true;
-        java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                ReactorDesigner.find(size,config,partsForSearch,fuel,coolant,request))
-                .whenComplete((result,error) -> client.execute(() -> {
-                    designing=false;
-                    onResult.accept(error==null && revision==expectedRevision && ClientRuntimeConfig.snapshot()==snapshot
-                            ? result : null);
-                }));
+        autoDesignCancelled=cancelled;
+        var future=CompletableFuture.supplyAsync(() ->
+                ReactorDesigner.find(size,config,partsForSearch,fuel,coolant,request,cancelled::get),
+                AUTO_DESIGN_EXECUTOR);
+        autoDesignFuture=future;
+        future.whenComplete((result,error) -> client.execute(() -> {
+            if (generation!=autoDesignGeneration) return;
+            designing=false;
+            autoDesignFuture=null;
+            autoDesignCancelled=null;
+            onResult.accept(error==null && revision==expectedRevision && ClientRuntimeConfig.snapshot()==snapshot
+                    ? result : null);
+        }));
+    }
+
+    /** Cancel an in-flight auto design and ignore its late callback. */
+    public void cancelAutoDesign() {
+        autoDesignGeneration++;
+        var cancelled=autoDesignCancelled;
+        if (cancelled!=null) cancelled.set(true);
+        var future=autoDesignFuture;
+        if (future!=null) future.cancel(true);
+        autoDesignFuture=null;
+        autoDesignCancelled=null;
+        designing=false;
     }
 
     public void applyDesign(ReactorDesigner.Design design,long target) {

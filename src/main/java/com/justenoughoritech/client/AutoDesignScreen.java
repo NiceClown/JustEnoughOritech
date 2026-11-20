@@ -187,7 +187,7 @@ final class AutoDesignScreen extends Screen {
         return tr(message,design.exportRate(),design.ticks());
     }
 
-    @Override public void onClose() { minecraft.setScreen(parent); }
+    @Override public void onClose() { WB.cancelAutoDesign(); minecraft.setScreen(parent); }
     @Override public boolean isPauseScreen() { return false; }
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float partialTick) {
