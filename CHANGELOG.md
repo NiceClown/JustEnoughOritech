@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.5.2 — test fix release
+
+Just Enough Oritech by **NiceClown**.
+
+This release fixes the second planner review (the v0.5.1 findings) and adds regressions for the refined cooling and resize paths. 0.5.2 supersedes 0.5.1.
+
+### Top-K refinement
+
+- **Every refinement seed is independent.** Each seed now gets a fresh search with `best = null` and `danger = null`. The seed is first simulated with its own height policy, then `refineBest` mutates that seed's local winner. Previously the global winner was injected as the baseline, so after the first mutation seeds #2–#5 were silently refining seed #1 again.
+- Results from every seed are merged into the global winner with the normal `better(...)` comparator for both stable and dangerous candidates.
+- **Refinement budget is a pool.** A single `REFINE_BUDGET` is split through `child()` / `absorb()`, so a fast seed returns its unused budget to the next seed. The loop also stops when the pool reports the deadline or cancellation.
+
+### Cooling and search
+
+- **One-absorber-side patterns fixed.** Absorbers are now placed perpendicular to the pipe channels. With `verticalChannels == true` pipes run on Z and absorbers on X; with `false` pipes run on X and absorbers on Z. The previous argument placed both on the same axis, so no absorber was ever placed and the pattern degenerated to a passive vent-only layout.
+- **Stretched initial layouts skip the fixed phase.** When resizing is enabled and the starting reactor is not balanced, the fixed search is skipped entirely. This saves the fixed budget and keeps stretched candidates out of the top-K shortlist, so they cannot win later on raw export.
+- **Goal-driven local search.** The hard “75% heat” split was replaced with an optimisation goal:
+  - when more power, a target shortfall or resizing is in play, cold rod groups are upgraded, reflectors are added and combined “upgrade + adjacent vent/absorber” moves are tried while the peak is below the risk limit;
+  - when the heat ceiling is reached, pipes/reflectors are replaced with vents or absorbers to create headroom;
+  - when a positive target is already exceeded, the hottest groups are downgraded and spare reflectors are removed to save fuel, blocks and heat.
+- Removed the dead `EMPTY → vent/absorber` local moves. Cooling upgrades now replace `PIPE` or `REFLECTOR` cells, or are combined with a rod upgrade, so they do not lose immediately on block count.
+- Combined moves allow the extra cooler to be paid for by a higher per-layer output or a lower refined height.
+
+### Deduplication and height
+
+- The `LayoutKey` set is shared between the fixed and growth phases, and a separate set is shared by all top-K refinement seeds.
+- Duplicate checks now happen twice: an early 2D check before simulation, and a final key check after height adjustment. Seeds with different starting heights that converge to the same final layout are skipped correctly.
+- Added a comment documenting the deliberate transposed-layout canonicalisation trade-off: rotations are deduplicated for speed, but the simulation's `HashMap` iteration order can differ by a few edge ticks.
+
+### Tests
+
+- Added `oneAbsorberSidePlacesAbsorbersPerpendicularToPipes`, checking both channel orientations.
+- Added `resizesStretchedLayoutToBalancedShape`, which starts from a 2×10×10 reactor and verifies a balanced result within the 2:1 limit.
+- 13 planner/simulation tests now pass, including 10, 100, 2,000, 10,000 and 1,000,000 RF/t targets.
+
+### Compatibility
+
+- Minecraft **26.1.2**, NeoForge **26.1.2.109**, Java **25**.
+- Verified with Oritech **2.0.0-exp12** and **2.0.0-exp14**.
+- Client and server both need the mod.
+
 ## 0.5.1 — test fix release
 
 Just Enough Oritech by **NiceClown**.

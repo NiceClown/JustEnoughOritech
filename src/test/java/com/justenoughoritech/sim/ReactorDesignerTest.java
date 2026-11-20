@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -93,6 +94,48 @@ class ReactorDesignerTest {
         assertNotNull(result.safe(), "expected a stable design");
         assertTrue(result.safe().exportRate() >= 10_000,
                 "expected at least 10000 RF/t, got " + result.safe().exportRate());
+    }
+
+    @Test
+    void oneAbsorberSidePlacesAbsorbersPerpendicularToPipes() {
+        var rod = part("test:single", ReactorParts.Kind.ROD, 1, 1);
+        var absorber = part("test:absorber", ReactorParts.Kind.ABSORBER, 0, 0);
+        var vent = part("test:vent", ReactorParts.Kind.VENT, 0, 0);
+
+        var zChannels = new ReactorLayout();
+        zChannels.resize(5, 5, 66);
+        zChannels.setHeight(1, 66);
+        zChannels.set(2, 2, rod);
+        ReactorDesigner.placeOneAbsorberSide(zChannels, absorber, vent, true);
+        assertEquals(ReactorParts.Kind.ABSORBER, zChannels.get(1, 2).kind());
+        assertEquals(ReactorParts.Kind.ABSORBER, zChannels.get(3, 2).kind());
+        assertEquals(ReactorParts.Kind.VENT, zChannels.get(2, 1).kind());
+        assertEquals(ReactorParts.Kind.VENT, zChannels.get(2, 3).kind());
+
+        var xChannels = new ReactorLayout();
+        xChannels.resize(5, 5, 66);
+        xChannels.setHeight(1, 66);
+        xChannels.set(2, 2, rod);
+        ReactorDesigner.placeOneAbsorberSide(xChannels, absorber, vent, false);
+        assertEquals(ReactorParts.Kind.ABSORBER, xChannels.get(2, 1).kind());
+        assertEquals(ReactorParts.Kind.ABSORBER, xChannels.get(2, 3).kind());
+        assertEquals(ReactorParts.Kind.VENT, xChannels.get(1, 2).kind());
+        assertEquals(ReactorParts.Kind.VENT, xChannels.get(3, 2).kind());
+    }
+
+    @Test
+    void resizesStretchedLayoutToBalancedShape() {
+        var layout = new ReactorLayout();
+        layout.resize(2, 10, 66);
+        layout.setHeight(10, 66);
+        var result = ReactorDesigner.find(layout, ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY,
+                request(2000, true));
+        assertNotNull(result.safe(), "expected a stable design from a stretched starting layout");
+        var design = result.safe().layout();
+        int min = Math.min(design.width(), Math.min(design.length(), design.height()));
+        int max = Math.max(design.width(), Math.max(design.length(), design.height()));
+        assertTrue(max <= 2 * min, "resized reactor should respect the 2:1 aspect limit");
     }
 
     @Test

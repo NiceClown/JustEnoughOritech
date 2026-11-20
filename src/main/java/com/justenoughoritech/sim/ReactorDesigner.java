@@ -68,7 +68,11 @@ public final class ReactorDesigner {
     private record Footprint(int width,int length) {}
     private record RodBounds(int minX,int maxX,int minZ,int maxZ) {}
     private record RodHeatGroup(List<Cell> cells,double average) {}
-    /** Canonical 2D layout key. Transposed layouts normalise to the same key. */
+    /**
+     * Canonical 2D layout key. Transposed layouts normalise to the same key. This intentionally
+     * accepts that the simulation's HashMap iteration order can differ by a few edge ticks after
+     * a 90-degree rotation; the speed gain for the heuristic search is worth it.
+     */
     private record LayoutKey(int width,int length,int height,List<String> cells) {
         private static LayoutKey of(ReactorLayout layout) {
             int width=layout.width(), length=layout.length();
@@ -129,17 +133,17 @@ public final class ReactorDesigner {
 
         long deadline=System.nanoTime()+SEARCH_NANOS;
         var shortlist=new Shortlist(request.target());
-        var fixedBudget=new Budget(FIXED_BUDGET,deadline,stop);
-        var fixed=new Search(settings,fuel,coolant,request,fixedBudget,false,false,shortlist);
-        searchStable(size,rods,coolers,pipe,reflector,fixed);
+        var mainSeen=new HashSet<LayoutKey>();
         boolean resize=request.allowResize() && request.target()>0;
-        Design best=fixed.best, danger=fixed.danger;
+        Design best=null, danger=null;
+        if (!(resize && !balanced(size))) {
+            var fixedBudget=new Budget(FIXED_BUDGET,deadline,stop);
+            var fixed=new Search(settings,fuel,coolant,request,fixedBudget,false,false,shortlist,mainSeen);
+            searchStable(size,rods,coolers,pipe,reflector,fixed);
+            best=fixed.best;
+            danger=fixed.danger;
+        }
         if (resize && (!balanced(size) || best==null || best.exportRate()<request.target())) {
-            // An existing stretched layout must not win over the compact search solely on output.
-            if (!balanced(size)) {
-                best=null;
-                danger=null;
-            }
             int limit=growthLimit(settings.maxSize());
             var growthBudget=new Budget(GROWTH_BUDGET,deadline,stop);
             var footprints=footprints(settings,rods.getFirst(),request.target(),size);
@@ -157,7 +161,7 @@ public final class ReactorDesigner {
                 var shape=new ReactorLayout();
                 shape.resize(width,length,limit);
                 shape.setHeight(minimumHeight,limit);
-                var grown=new Search(settings,fuel,coolant,request,footprintBudget,true,false,shortlist);
+                var grown=new Search(settings,fuel,coolant,request,footprintBudget,true,false,shortlist,mainSeen);
                 grown.best=best;
                 grown.danger=danger;
                 searchStable(shape,rods,coolers,pipe,reflector,grown);
@@ -171,24 +175,27 @@ public final class ReactorDesigner {
         if (best!=null && !stop.getAsBoolean()) {
             var seeds=shortlist.top(SHORTLIST_SIZE);
             if (seeds.isEmpty()) seeds=List.of(best);
-            long perSeed=Math.max(1,REFINE_BUDGET/Math.max(1,seeds.size()));
-            for (var seed : seeds) {
-                if (stop.getAsBoolean()) break;
-                var refineBudget=new Budget(perSeed,deadline,stop);
-                var refine=new Search(settings,fuel,coolant,request,refineBudget,resize,resize,null);
-                refine.best=best;
-                refine.danger=danger;
+            var refinePool=new Budget(REFINE_BUDGET,deadline,stop);
+            var refineSeen=new HashSet<LayoutKey>();
+            for (int i=0;i<seeds.size();i++) {
+                if (refinePool.exhausted()) break;
+                var seed=seeds.get(i);
+                long share=Math.max(1,refinePool.remaining()/Math.max(1,seeds.size()-i));
+                long perSeed=Math.min(refinePool.remaining(),share);
+                var refineBudget=refinePool.child(perSeed);
+                var refine=new Search(settings,fuel,coolant,request,refineBudget,resize,resize,null,refineSeen);
                 refine.tryLayout(seed.layout().copy());
                 refineBest(seed,rods,vent,absorber,pipe,reflector,refine);
-                best=refine.best;
-                danger=refine.danger;
+                refinePool.absorb(refineBudget);
+                if (refine.best!=null && better(refine.best,best,request.target())) best=refine.best;
+                if (refine.danger!=null && better(refine.danger,danger,request.target())) danger=refine.danger;
             }
         }
 
         // Temperature-guided local search on the current winner.
         if (best!=null && !stop.getAsBoolean()) {
             var localBudget=new Budget(LOCAL_BUDGET,deadline,stop);
-            var local=new Search(settings,fuel,coolant,request,localBudget,resize,resize,null);
+            var local=new Search(settings,fuel,coolant,request,localBudget,resize,resize,null,null);
             local.best=best;
             local.danger=danger;
             localSearch(rods,vent,absorber,reflector,local);
@@ -202,7 +209,7 @@ public final class ReactorDesigner {
             var riskSize=resize && !balanced(size) && best!=null ? best.layout() : size;
             if (!resize || balanced(riskSize)) {
                 var riskBudget=new Budget(RISK_BUDGET,deadline,stop);
-                var aggressive=new Search(settings,fuel,coolant,request,riskBudget,false,false,null);
+                var aggressive=new Search(settings,fuel,coolant,request,riskBudget,false,false,null,null);
                 aggressive.best=best;
                 aggressive.danger=danger;
                 for (int spacing : new int[]{1,2,3}) {
@@ -276,8 +283,7 @@ public final class ReactorDesigner {
                                 || cooler.oneAbsorberSide() && method!=CoolingPattern.PIPES) continue;
                         var layout=core.copy();
                         if (cooler.oneAbsorberSide()) {
-                            placeOuterCooling(layout,cooler.nearRods(),!verticalChannels);
-                            fillNeighbors(layout,ReactorParts.Kind.ROD,cooler.nearPipes(),1,1);
+                            placeOneAbsorberSide(layout,cooler.nearRods(),cooler.nearPipes(),verticalChannels);
                         } else fillNeighbors(layout,ReactorParts.Kind.ROD,cooler.nearRods(),1,1);
                         if (method.usesPipes)
                             fillNeighbors(layout,ReactorParts.Kind.PIPE,cooler.nearPipes(),1,1);
@@ -508,24 +514,41 @@ public final class ReactorDesigner {
             var groups=rodHeatGroups(current);
             if (groups.isEmpty()) return;
             groups.sort(Comparator.comparingDouble(RodHeatGroup::average));
-            boolean headroom=(long)current.peakHeat()*4<(long)limit*3;
+            long target=search.request.target();
+            boolean needMore=target==0 || current.exportRate()<target || search.adjustHeight;
+            boolean surplus=target>0 && current.exportRate()>target;
             var variants=new ArrayList<ReactorLayout>();
-            if (headroom) {
-                for (int i=0;i<Math.min(3,groups.size());i++) {
-                    var group=groups.get(i);
-                    addRodTypeVariant(variants,current,group,orderedRods,1);
-                    addAdjacentVariant(variants,current,group,reflector,Set.of(ReactorParts.Kind.EMPTY));
+            if (needMore) {
+                if ((long)current.peakHeat()<limit) {
+                    // Upgrade cold groups at any safe temperature. Combined upgrade + cooling moves pay
+                    // for their extra block with a higher per-layer output and possibly a lower height.
+                    for (int i=0;i<Math.min(3,groups.size());i++) {
+                        var group=groups.get(i);
+                        addRodTypeVariant(variants,current,group,orderedRods,1);
+                        addAdjacentVariant(variants,current,group,reflector,Set.of(ReactorParts.Kind.EMPTY));
+                        if (mode!=CoolingMode.WITH_ICE)
+                            addCombinedUpgradeVariant(variants,current,group,orderedRods,vent);
+                        if (mode!=CoolingMode.PASSIVE)
+                            addCombinedUpgradeVariant(variants,current,group,orderedRods,absorber);
+                    }
+                } else {
+                    // At the heat ceiling, replace pipes/reflectors with active coolers to create headroom.
+                    for (int i=0;i<Math.min(3,groups.size());i++) {
+                        var group=groups.get(groups.size()-1-i);
+                        if (mode!=CoolingMode.WITH_ICE)
+                            addAdjacentVariant(variants,current,group,vent,
+                                    Set.of(ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR));
+                        if (mode!=CoolingMode.PASSIVE)
+                            addAdjacentVariant(variants,current,group,absorber,
+                                    Set.of(ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR));
+                    }
                 }
-            } else {
+            } else if (surplus) {
+                // The target is already met with margin: save fuel, blocks and heat.
                 for (int i=0;i<Math.min(3,groups.size());i++) {
                     var group=groups.get(groups.size()-1-i);
                     addRodTypeVariant(variants,current,group,orderedRods,-1);
-                    if (mode!=CoolingMode.WITH_ICE)
-                        addAdjacentVariant(variants,current,group,vent,
-                                Set.of(ReactorParts.Kind.EMPTY,ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR));
-                    if (mode!=CoolingMode.PASSIVE)
-                        addAdjacentVariant(variants,current,group,absorber,
-                                Set.of(ReactorParts.Kind.EMPTY,ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR));
+                    addRemoveReflectorVariant(variants,current,group);
                 }
             }
             boolean improved=false;
@@ -539,6 +562,53 @@ public final class ReactorDesigner {
                 }
             }
             if (!improved) return;
+        }
+    }
+
+    private static void addCombinedUpgradeVariant(List<ReactorLayout> out,Design design,RodHeatGroup group,
+                                                  List<ReactorParts.Part> orderedRods,ReactorParts.Part coolant) {
+        if (coolant.kind()==ReactorParts.Kind.EMPTY || group.cells().isEmpty()) return;
+        var first=group.cells().getFirst();
+        var current=design.layout().get(first.x(),first.z());
+        if (current.kind()!=ReactorParts.Kind.ROD) return;
+        int index=-1;
+        for (int i=0;i<orderedRods.size();i++) {
+            if (orderedRods.get(i).id().equals(current.id())) {
+                index=i;
+                break;
+            }
+        }
+        if (index<0 || index+1>=orderedRods.size()) return;
+        var upgraded=design.layout().copy();
+        if (!fillGroup(upgraded,group.cells(),orderedRods.get(index+1),
+                part -> part.kind()==ReactorParts.Kind.ROD)) return;
+        var keys=new HashSet<String>();
+        for (var cell : group.cells()) {
+            for (var direction : DIRECTIONS) {
+                int x=cell.x()+direction[0], z=cell.z()+direction[1];
+                if (x<0 || x>=design.layout().width() || z<0 || z>=design.layout().length()) continue;
+                var mirror=mirrorCells(design.layout(),x,z);
+                if (!keys.add(groupKey(mirror))) continue;
+                var candidate=upgraded.copy();
+                if (fillGroup(candidate,mirror,coolant,part -> part.kind()==ReactorParts.Kind.EMPTY))
+                    out.add(candidate);
+            }
+        }
+    }
+
+    private static void addRemoveReflectorVariant(List<ReactorLayout> out,Design design,RodHeatGroup group) {
+        var layout=design.layout();
+        var keys=new HashSet<String>();
+        for (var cell : group.cells()) {
+            for (var direction : DIRECTIONS) {
+                int x=cell.x()+direction[0], z=cell.z()+direction[1];
+                if (x<0 || x>=layout.width() || z<0 || z>=layout.length()) continue;
+                var mirror=mirrorCells(layout,x,z);
+                if (!keys.add(groupKey(mirror))) continue;
+                var candidate=layout.copy();
+                if (fillGroup(candidate,mirror,ReactorParts.Part.EMPTY,
+                        part -> part.kind()==ReactorParts.Kind.REFLECTOR)) out.add(candidate);
+            }
         }
     }
 
@@ -814,6 +884,13 @@ public final class ReactorDesigner {
         }
     }
 
+    /** One-absorber-side pattern: absorbers sit perpendicular to the pipe channels, vents hug the rods. */
+    static void placeOneAbsorberSide(ReactorLayout layout,ReactorParts.Part nearRods,
+                                     ReactorParts.Part nearPipes,boolean verticalChannels) {
+        placeOuterCooling(layout,nearRods,verticalChannels);
+        fillNeighbors(layout,ReactorParts.Kind.ROD,nearPipes,1,1);
+    }
+
     private static void placeSides(ReactorLayout layout,int x,int z,ReactorParts.Part part,boolean alongX) {
         if (alongX) {
             if (x>0 && layout.get(x-1,z).kind()==ReactorParts.Kind.EMPTY) layout.set(x-1,z,part);
@@ -985,11 +1062,12 @@ public final class ReactorDesigner {
         private final boolean refineHeight;
         private final Budget budget;
         private final Shortlist shortlist;
-        private final Set<LayoutKey> seen=new HashSet<>();
+        private final Set<LayoutKey> seen;
         private Design best,danger;
 
         private Search(ReactorConfig settings,ReactorInputs.Fuel fuel,ItemStack coolant,Request request,
-                       Budget budget,boolean adjustHeight,boolean refineHeight,Shortlist shortlist) {
+                       Budget budget,boolean adjustHeight,boolean refineHeight,Shortlist shortlist,
+                       Set<LayoutKey> seen) {
             this.settings=settings;
             this.fuel=fuel;
             this.coolant=coolant;
@@ -998,6 +1076,7 @@ public final class ReactorDesigner {
             this.adjustHeight=adjustHeight;
             this.refineHeight=refineHeight;
             this.shortlist=shortlist;
+            this.seen=seen==null ? new HashSet<>() : seen;
         }
 
         boolean exhausted() { return budget.exhausted(); }
@@ -1005,8 +1084,7 @@ public final class ReactorDesigner {
         void tryLayout(ReactorLayout layout) {
             if (exhausted()) return;
             int width=layout.width(), length=layout.length();
-            var key=LayoutKey.of(layout);
-            if (!seen.add(key)) return;
+            if (seen.contains(LayoutKey.of(layout))) return;
             budget.spend((long)width*length);
             var simulation=new ReactorSimulation(layout,settings,fuel,coolant);
             long perLayer=simulation.generationPerLayer();
@@ -1025,6 +1103,7 @@ public final class ReactorDesigner {
                     height=ReactorSimulation.coolantAlignedHeight(height,Math.min(maxHeight,height+Math.max(1,height/5)));
                 layout.setHeight(height,maxHeight);
             }
+            if (!seen.add(LayoutKey.of(layout))) return;
             int height=layout.height();
             long generation=perLayer*height;
             long needed=request.target()>0 ? Math.min(request.target(),generation) : generation;
