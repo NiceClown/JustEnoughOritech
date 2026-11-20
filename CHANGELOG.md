@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2
+
+Just Enough Oritech by **NiceClown**.
+
+- Fixed the English reactor editor labels for decreasing width, length, height, and energy port count.
+- Restored the multiplication sign between the core dimensions and the ellipses in the layout search and printer supply status messages.
+
 ## 0.4.1
 
 Just Enough Oritech by **NiceClown**. This stable release covers the changes since 0.3.3.
