@@ -72,6 +72,30 @@ class ReactorDesignerTest {
     }
 
     @Test
+    void handlesWideLayouts() {
+        var layout = new ReactorLayout();
+        layout.resize(6, 4, 66);
+        layout.setHeight(3, 66);
+        var result = ReactorDesigner.find(layout, ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY,
+                request(0, false));
+        assertNotNull(result.safe(), "expected a stable design on a wide layout");
+    }
+
+    @Test
+    void cautiousDesignRespectsHeatBudget() {
+        var cautious = new ReactorDesigner.Request(0, ReactorDesigner.Risk.CAUTIOUS,
+                Set.of("test:single", "test:double", "test:quad"), false,
+                ReactorDesigner.CoolingMode.AUTO);
+        var result = ReactorDesigner.find(layout(), ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY, cautious);
+        if (result.safe() != null) {
+            assertTrue((long) result.safe().peakHeat() * 100
+                    <= (long) ReactorConfig.DEFAULT.maxHeat() * 65);
+        }
+    }
+
+    @Test
     void returnsNothingWhenCancelled() {
         var cancelled = new AtomicBoolean(true);
         var result = ReactorDesigner.find(layout(), ReactorConfig.DEFAULT, parts(true),

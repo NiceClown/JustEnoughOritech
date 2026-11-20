@@ -31,7 +31,7 @@ public final class ReactorSimulation {
     private final Cell[] order;
     private final int[] heatHistory = new int[GRAPH_SIZE];
     private int historyCursor, historyLength;
-    private int ticks, unstableTicks, maxHeatSeen, fuelItems, coolantItems, steadyTicks;
+    private int ticks, unstableTicks, maxHeatSeen, fuelItems, coolantItems;
     private final int[] heatCheckpoint, coolantCheckpoint;
     private int checkpointTick, checkpointWindow=1, checkpointPeak, checkpointCoolantItems;
     private double steadyCoolantPerSecond;
@@ -144,19 +144,15 @@ public final class ReactorSimulation {
     }
 
     private void checkStability(int hottest) {
-        if (coolantCheckpoint==null) {
-            steadyTicks=unstableTicks==0 && matchesCheckpoint() ? steadyTicks+1 : 0;
-            if (steadyTicks>=200) status=Status.STEADY;
-            else saveCheckpoint();
-            return;
-        }
-
-        // Compare the entire thermal state, including coolant reserves, over increasing windows.
-        // Equal states prove the same tick sequence will repeat under continuous supply.
+        // Compare the entire thermal state, including coolant reserves when present, over increasing
+        // windows. Equal states prove the same tick sequence will repeat under continuous supply.
+        // Passive reactors use the same detector: a fixed point is found in 1-2 ticks and a short
+        // oscillation in a few ticks, instead of always waiting for 200 stable ticks.
         checkpointPeak=Math.max(checkpointPeak,hottest);
         int period=ticks-checkpointTick;
         if (checkpointPeak<=config.maxHeat() && matchesCheckpoint()) {
-            steadyCoolantPerSecond=20.0*(coolantItems-checkpointCoolantItems)/period;
+            steadyCoolantPerSecond=coolantCheckpoint==null ? 0.0
+                    : 20.0*(coolantItems-checkpointCoolantItems)/period;
             status=Status.STEADY;
         } else if (period==checkpointWindow) {
             saveCheckpoint();

@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.5.1 — test fix release
+
+Just Enough Oritech by **NiceClown**.
+
+This test release fixes the issues found in the 0.5.0 planner review. It focuses on correctness, search quality and the stability detector. 0.5.1 supersedes 0.5.0; the first test release is kept for history.
+
+### Reactor simulation
+
+- **Unified stability detector.** Removed the separate passive `steadyTicks >= 200` branch. Passive reactors now use the same full-state cycle detector as reactors with coolant. A fixed point is accepted after 1–2 ticks, and a short safe oscillation (for example a 2-tick vent cycle) is accepted after 2–4 ticks instead of burning the full 3,600-tick limit and being discarded.
+- **Risk-aware early stop.** For cautious and balanced modes, the simulation stops as soon as the observed peak heat exceeds the selected risk threshold (65% or 100% of the configured limit). Such a design can never pass the final risk check, so the remaining ticks were wasted.
+- **O(1) thermal pre-check.** Before the first tick, the designer now rejects a candidate when:
+  - any rod has no adjacent heat pipe, vent or absorber; or
+  - the total generated heat per tick is greater than the maximum possible cooling at the selected risk ceiling. The bound counts vent capacity at the ceiling temperature and absorber contacts with rods and heat pipes.
+- **Corrected passive coolant value.** Passive designs now report `0.0` coolant per second explicitly, without relying on the removed passive branch.
+- **Regression tests.** Added a simulation test that verifies a passive fixed point reaches `STEADY` within a few ticks.
+
+### Auto-layout search
+
+- **Fixed boundary detection.** `replaceRodRing` now uses the bounding box of all rod cells (`minX`, `maxX`, `minZ`, `maxZ`) instead of requiring four rod neighbours. With the auto-layout pitches that condition was impossible, so every rod was treated as a boundary rod and the core pass was dead code.
+- **Fixed checkerboard mixing.** Mixed rod types now use the ordinal indices of the unique rod X and Z coordinates, not the world-coordinate parity `(x + z) & 1`. The old code degenerated to a single rod type on odd reactor sizes with even pitches.
+- **Atomic pipe-ring refinement.** The refinement pass now builds and tests “first ring = heat pipe, second ring = vent/absorber” as one layout. The intermediate pipe-only layout is no longer simulated and can no longer prevent the second ring from being created. Second-ring cells may also be replaced when they already contain a vent or absorber.
+- **Orientation-aware cooling.** Pitch pairs now carry a `verticalChannels` flag. Reflectors, pipes, outer reflectors, outer absorbers and the pipe/reflector axes all swap consistently for transposed pitches such as `{2,1}`, `{3,1}` and `{3,2}`. The previous code always used X for reflectors and Z for pipes, which blocked the only cooling channel on transposed layouts.
+- **Centre-line cooling.** Odd-sized reactors now place outer reflectors and absorbers on both sides of a centre-line rod when the cells are empty. Previously `outward == 0` compared the rod with itself, so the centre line always stayed uncooled.
+- **Height refinement.** The refinement search now receives the resize state and can lower the reactor height when stronger rods, reflectors or a better cooling ring increase generation per layer. It respects the balanced minimum height and the 2:1 aspect limit instead of keeping the old, unnecessarily tall shape.
+- **Candidate deduplication.** Every search phase keeps a canonical `LayoutKey` (dimensions, height and ordered part IDs). Exact duplicates and transposed duplicates are skipped before a new simulation is constructed. Footprints no longer generate both `(side, side + 1)` and `(side + 1, side)`.
+- **Per-footprint growth quota.** The growth budget is divided between the remaining footprints, with unused budget returned to the pool. A single large footprint can no longer consume the entire growth phase before the anisotropic or neighbouring sizes are tried.
+- **Top-K refinement seeds.** The main search now keeps a small diversified shortlist (up to five candidates, keyed by shape, cooling composition and rod types). Each seed receives a share of the refinement budget, so a candidate that lost on homogeneous rods can still win after a mixed-rod or cooling-ring upgrade.
+- **Temperature-guided local search.** The current winner is refined with up to 24 symmetric hill-climb steps using the actual per-cell temperatures:
+  - with temperature headroom, the coldest rod groups are upgraded to a stronger rod type or get an adjacent neutron reflector;
+  - near the heat limit, the hottest groups are downgraded or get an adjacent vent/absorber in place of an empty, pipe or reflector cell.
+- **Corrected mixed-rod metrics.** Fuel demand and rod-block counts are calculated from the final layout, so mixed single/double/quad layouts are compared correctly.
+
+### Build and tests
+
+- Added seven planner/simulation regression tests covering stable design search, a 2000 RF/t target, cautious heat limits, wide layouts, cancellation, missing cooling components and fast passive stabilisation. All tests pass.
+- The build now has a test source set wired to the main NeoForge classpath and JUnit 5.
+
+### Compatibility
+
+- Minecraft **26.1.2**, NeoForge **26.1.2.109**, Java **25**.
+- Verified with Oritech **2.0.0-exp12** and **2.0.0-exp14**; the reactor physics classes are identical in both builds.
+- Client and server both need the mod.
+
+### Notes
+
+- Auto layout is still a bounded heuristic, not an exhaustive solver. The new search and local refinement improve the result but do not guarantee a mathematical global optimum.
+- The search is capped by phase budgets and a 20-second wall-clock deadline. On very large reactors it returns the best candidate found so far.
+- Please report a design that melts down unexpectedly together with its dimensions, rod types and selected risk mode.
+
 ## 0.5.0 — test release
 
 Just Enough Oritech by **NiceClown**.
