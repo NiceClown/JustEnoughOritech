@@ -96,6 +96,36 @@ class ReactorDesignerTest {
     }
 
     @Test
+    void findsTinyTarget10() {
+        var result = ReactorDesigner.find(layout(), ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY,
+                request(10, false));
+        assertNotNull(result.safe(), "expected a stable design for 10 RF/t");
+        assertTrue(result.safe().exportRate() >= 10);
+    }
+
+    @Test
+    void findsTinyTarget100() {
+        var result = ReactorDesigner.find(layout(), ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY,
+                request(100, false));
+        assertNotNull(result.safe(), "expected a stable design for 100 RF/t");
+        assertTrue(result.safe().exportRate() >= 100);
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(30)
+    void handlesMillionTarget() {
+        var result = ReactorDesigner.find(layout(), ReactorConfig.DEFAULT, parts(true),
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY,
+                request(1_000_000, true));
+        assertNotNull(result.safe(), "expected the best stable design for a 1M RF/t request");
+        var design = result.safe();
+        assertTrue(design.exportRate() >= 1_000_000,
+                "expected at least 1000000 RF/t, got " + design.exportRate());
+    }
+
+    @Test
     void cautiousDesignRespectsHeatBudget() {
         var cautious = new ReactorDesigner.Request(0, ReactorDesigner.Risk.CAUTIOUS,
                 Set.of("test:single", "test:double", "test:quad"), false,
