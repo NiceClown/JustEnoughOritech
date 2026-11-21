@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.3 — planner and client lifecycle fix release
+
+Just Enough Oritech by **NiceClown**.
+
+This release fixes the remaining v0.5.2 planner review findings, hardens the auto-design screen against stale and disconnected state, and updates server data after a datapack reload. 0.5.3 supersedes 0.5.2.
+
+### Auto planner
+
+- **Height growth is no longer blocked by the shared seen set.** Duplicate checks made before a height adjustment now use a per-search local set at the starting height, and a candidate enters the shared set only after its final height is known. A 3×3×3 start can grow to 3×3×4 or taller instead of jumping straight to a wider footprint.
+- **Cooling can pay for reflectors.** Local search may replace EMPTY, vent, pipe or absorber cells around cold rods with reflectors. Combined moves place a vent or absorber over EMPTY, pipe or reflector cells, and in AUTO and WITH_ICE modes an absorber may replace a vent.
+- **Hot and cold moves are considered together.** A hot group no longer suppresses cold upgrades, reflector swaps or paired cooling-and-upgrade moves in the same local-search iteration; the simulation still accepts or rejects each candidate. Economy moves also run when the target is exactly met, while a move that drops below the target still loses. The need-more phase no longer tries a losing lone reflector-to-cooler replacement.
+- **Refinement seeds are fully independent.** Each Top-K seed gets a private seen set and starts from its own height-refined design, so mutations of one seed cannot prevent another seed from running.
+- **Cheaper duplicate checks.** The layout key is computed once per candidate when the height is unchanged. Square footprints skip transposed pitch pairs, hot rod groups use their hottest cell, and an expired deadline is checked before refinement and local search.
+
+### Client lifecycle
+
+- Editing the target, risk, cooling mode or rod set after a completed search now clears and disables both apply buttons, so a normal click cannot dereference a removed result.
+- Completed results remember the workbench revision and server snapshot they were produced for. Applying a safe result or confirming a risky one re-checks both, including after the confirmation screen, and refuses a stale result.
+- Client runtime settings and the workbench reset on disconnect. A new server snapshot with equal values is validated again after the connection state changes, so joining another server cannot keep stale capabilities.
+- The server re-sends reactor settings, fuel recipes and coolant tags to connected clients after a datapack reload; the client invalidates results computed from the previous snapshot.
+
+### Tests
+
+- Added planner phase regressions for height growth from the original cube, local search on a filled grid, near-limit cooling versus cold-group upgrades, surplus and exact-target economy moves, independent Top-K seed starts, and a budget-cutoff candidate that must not enter the shared seen set.
+- Added client lifecycle regressions for disconnect cleanup, a revalidated reload snapshot, unreachable-server state, workbench invalidation, and result guards following blueprint and snapshot changes.
+- The isolated client smoke starts Minecraft 26.1.2 with JEI, Oritech and the packaged addon, opens the JEI simulator, runs real auto-design searches, verifies that editing invalidates the completed result, triggers an integrated-server datapack reload, confirms that the held result is refused as stale, and applies a freshly recomputed result.
+
+### Compatibility
+
+- Minecraft **26.1.2**, NeoForge **26.1.2.109**, Java **25**.
+- Supports Oritech **2.0.0-exp12** and **2.0.0-exp14**; the packaged release was client-smoke tested with Oritech **2.0.0-exp12** and JEI **29.53.0.115**.
+- Client and server both need the mod.
+
 ## 0.5.2 — test fix release
 
 Just Enough Oritech by **NiceClown**.

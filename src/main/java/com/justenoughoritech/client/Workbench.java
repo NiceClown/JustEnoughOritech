@@ -38,6 +38,7 @@ public final class Workbench {
     private boolean designing;
     private CompletableFuture<ReactorDesigner.Result> autoDesignFuture;
     private AtomicBoolean autoDesignCancelled;
+    private java.util.function.Consumer<ReactorDesigner.Result> autoDesignCallback;
     private long autoDesignGeneration;
     public ReactorDesigner.Request lastRequest;
     public net.minecraft.network.chat.Component designStatus;
@@ -57,10 +58,12 @@ public final class Workbench {
     public void refreshInputs(boolean force) {
         var snapshot=ClientRuntimeConfig.snapshot();
         if(snapshot==null)return;
-        if(!force&&snapshot.equals(inputsSnapshot))return;
+        // Identity, not equals: every accepted payload is a fresh server snapshot, even when its values repeat.
+        if(!force&&snapshot==inputsSnapshot)return;
         inputsSnapshot=snapshot;
         if (!snapshot.compatible()) {
             issue = snapshot.compatibilityIssue();
+            inputs = new ReactorInputs(List.of(), List.of(), issue);
             ClientRuntimeConfig.setRuntimeCheck(false, issue);
             return;
         }
@@ -123,6 +126,18 @@ public final class Workbench {
         issue = null;
     }
 
+    /**
+     * Drops every piece of state derived from the previous server session. The user's blueprint,
+     * editing preferences and remembered request stay intact; results and a running simulation do not.
+     */
+    public void invalidateServerState() {
+        cancelAutoDesign();
+        reset();
+        inputsSnapshot = null;
+        inputs = new ReactorInputs(List.of(), List.of(), "Waiting for server recipes");
+        designStatus = null;
+    }
+
     public void edited() {
         reset();
         revision++;
@@ -155,21 +170,23 @@ public final class Workbench {
         lastRequest=request;
         designing=true;
         autoDesignCancelled=cancelled;
+        autoDesignCallback=onResult;
         var future=CompletableFuture.supplyAsync(() ->
                 ReactorDesigner.find(size,config,partsForSearch,fuel,coolant,request,cancelled::get),
                 AUTO_DESIGN_EXECUTOR);
         autoDesignFuture=future;
         future.whenComplete((result,error) -> client.execute(() -> {
-            if (generation!=autoDesignGeneration) return;
+            if (generation!=autoDesignGeneration || autoDesignCallback!=onResult) return;
             designing=false;
             autoDesignFuture=null;
             autoDesignCancelled=null;
+            autoDesignCallback=null;
             onResult.accept(error==null && revision==expectedRevision && ClientRuntimeConfig.snapshot()==snapshot
                     ? result : null);
         }));
     }
 
-    /** Cancel an in-flight auto design and ignore its late callback. */
+    /** Cancel an in-flight auto design, tell its owner the result is gone and ignore any late callback. */
     public void cancelAutoDesign() {
         autoDesignGeneration++;
         var cancelled=autoDesignCancelled;
@@ -179,6 +196,9 @@ public final class Workbench {
         autoDesignFuture=null;
         autoDesignCancelled=null;
         designing=false;
+        var owner=autoDesignCallback;
+        autoDesignCallback=null;
+        if (owner!=null) owner.accept(null);
     }
 
     public void applyDesign(ReactorDesigner.Design design,long target) {

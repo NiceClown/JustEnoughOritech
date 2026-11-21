@@ -35,12 +35,14 @@ final class AutoDesignScreen extends Screen {
     private ReactorDesigner.CoolingMode coolingMode=ReactorDesigner.CoolingMode.AUTO;
     private ReactorDesigner.Result result;
     private ReactorDesigner.Request completedRequest;
+    private DesignGuard guard;
     private String targetText="";
     private EditBox target;
     private CycleButton<ReactorDesigner.Risk> riskButton;
     private CycleButton<ReactorDesigner.CoolingMode> coolingButton;
     private Button search,resize,applySafe,applyDanger;
     private boolean busy,attempted,allowResize;
+    private long searchToken;
     private int left,top,panelWidth,coolingWidth;
 
     AutoDesignScreen(Screen parent) {
@@ -136,49 +138,66 @@ final class AutoDesignScreen extends Screen {
     private void invalidateResult() {
         result=null;
         completedRequest=null;
+        guard=null;
         attempted=false;
+        updateButtons();
     }
 
     private void search() {
         if (busy || allowed.isEmpty()) return;
         long goal=targetText.isEmpty() ? 0 : Long.parseLong(targetText);
         var request=new ReactorDesigner.Request(goal,risk,allowed,allowResize,coolingMode);
+        long token=++searchToken;
         busy=true;
         attempted=false;
         result=null;
         completedRequest=null;
+        guard=null;
         updateButtons();
         WB.autoDesign(request,found -> {
+            if (token!=searchToken) return;
             busy=false;
             attempted=true;
             result=found;
-            completedRequest=request;
+            completedRequest=found==null ? null : request;
+            guard=found==null ? null : DesignGuard.capture();
             updateButtons();
         });
     }
 
     private void updateButtons() {
-        target.setEditable(!busy);
-        riskButton.active=!busy;
-        coolingButton.active=!busy;
-        resize.active=!busy;
+        if (target!=null) target.setEditable(!busy);
+        if (riskButton!=null) riskButton.active=!busy;
+        if (coolingButton!=null) coolingButton.active=!busy;
+        if (resize!=null) resize.active=!busy;
         for (var button : rodButtons) button.active=!busy;
-        search.active=!busy && !allowed.isEmpty();
-        applySafe.active=!busy && result!=null && result.safe()!=null;
-        applyDanger.active=!busy && result!=null && result.dangerous()!=null;
+        if (search!=null) search.active=!busy && !allowed.isEmpty();
+        if (applySafe!=null) applySafe.active=!busy && result!=null && result.safe()!=null;
+        if (applyDanger!=null) applyDanger.active=!busy && result!=null && result.dangerous()!=null;
     }
 
-    private void apply(ReactorDesigner.Design design) {
-        if (design==null || completedRequest==null) return;
+    /** Apply a completed design, refusing anything computed from a blueprint or server snapshot that changed. */
+    private boolean apply(ReactorDesigner.Design design) {
+        if (design==null || completedRequest==null || guard==null || !guard.isCurrent()) {
+            result=null;
+            completedRequest=null;
+            guard=null;
+            attempted=true;
+            updateButtons();
+            return false;
+        }
         WB.applyDesign(design,completedRequest.target());
         onClose();
+        return true;
     }
 
     private void confirmDanger() {
-        var design=result.dangerous();
+        var current=result;
+        if (current==null || current.dangerous()==null || guard==null) return;
+        var design=current.dangerous();
         minecraft.setScreen(new ConfirmScreen(confirmed -> {
-            if (confirmed) apply(design);
-            else minecraft.setScreen(this);
+            if (confirmed && apply(design)) return;
+            minecraft.setScreen(this);
         },tr("auto_danger_title"),dangerSummary(design),tr("auto_apply_risky"),Component.translatable("gui.cancel")));
     }
 
@@ -187,7 +206,13 @@ final class AutoDesignScreen extends Screen {
         return tr(message,design.exportRate(),design.ticks());
     }
 
-    @Override public void onClose() { WB.cancelAutoDesign(); minecraft.setScreen(parent); }
+    @Override public void onClose() {
+        // Abandon this screen's callback before Workbench reports the cancellation.
+        searchToken++;
+        busy=false;
+        WB.cancelAutoDesign();
+        minecraft.setScreen(parent);
+    }
     @Override public boolean isPauseScreen() { return false; }
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float partialTick) {
@@ -212,7 +237,7 @@ final class AutoDesignScreen extends Screen {
         }
         if (result!=null && result.safe()!=null) {
             var design=result.safe();
-            long goal=completedRequest.target();
+            long goal=completedRequest==null ? 0 : completedRequest.target();
             var summary=goal>0 && design.exportRate()<goal ? tr("auto_goal_missed",design.exportRate(),goal)
                     : tr("auto_safe_result",design.exportRate());
             paragraph(graphics,summary,8,142,panelWidth-16,2,LIGHT);

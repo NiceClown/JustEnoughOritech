@@ -141,6 +141,18 @@ public final class ProjectionController {
         printer=null;
         preview=null;
         placements=List.of();
+        previewRotation=null;
+        revision=-1;
+        manualInspection=null;
+        finishedInspection=false;
+        nextInspection=0;
+    }
+
+    /** Drop every preview derived from the previous server session, e.g. on disconnect. */
+    static void onDisconnect() {
+        clear();
+        world=null;
+        rotation=Rotation.NONE;
     }
 
     @SubscribeEvent public static void tick(ClientTickEvent.Post event) {

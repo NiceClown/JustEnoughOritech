@@ -12,7 +12,21 @@ public final class ClientRuntimeConfig {
     private static volatile Boolean runtimeCompatible;
     private static volatile String runtimeIssue;
     private ClientRuntimeConfig() {}
-    public static void accept(ReactorConfigPayload payload) { snapshot = payload; runtimeCompatible = null; runtimeIssue = null; }
+    public static void accept(ReactorConfigPayload payload) {
+        if(payload==null)return;
+        snapshot = payload;
+        // Force a fresh runtime verification against the new snapshot and drop stale client results.
+        runtimeCompatible = null;
+        runtimeIssue = null;
+        Workbench.INSTANCE.invalidateServerState();
+    }
+    /** Forget the previous server session, e.g. when the client disconnects. */
+    public static void reset() {
+        snapshot = null;
+        runtimeCompatible = null;
+        runtimeIssue = null;
+        Workbench.INSTANCE.invalidateServerState();
+    }
     public static void setRuntimeCheck(boolean compatible, String issue) {
         runtimeCompatible = compatible;
         runtimeIssue = issue;

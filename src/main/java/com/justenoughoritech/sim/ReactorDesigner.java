@@ -30,6 +30,21 @@ public final class ReactorDesigner {
     private static final long SEARCH_NANOS = TimeUnit.SECONDS.toNanos(20);
     private static final int MAX_ASPECT_RATIO = 2;
     private static final int[][] DIRECTIONS = {{-1,0},{1,0},{0,-1},{0,1}};
+    /** First-ring replacements that let cold groups trade surplus cooling for a reflector. */
+    private static final Set<ReactorParts.Kind> REFLECTOR_TARGETS=Set.of(
+            ReactorParts.Kind.EMPTY,ReactorParts.Kind.VENT,
+            ReactorParts.Kind.PIPE,ReactorParts.Kind.ABSORBER);
+    /** Neighbouring replacements for combined rod-upgrade moves. */
+    private static final Set<ReactorParts.Kind> VENT_UPGRADE_TARGETS=Set.of(
+            ReactorParts.Kind.EMPTY,ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR);
+    private static final Set<ReactorParts.Kind> ABSORBER_UPGRADE_TARGETS=Set.of(
+            ReactorParts.Kind.EMPTY,ReactorParts.Kind.PIPE,
+            ReactorParts.Kind.REFLECTOR,ReactorParts.Kind.VENT);
+    /** Cooling targets for hot groups: an existing pipe can become a vent. */
+    private static final Set<ReactorParts.Kind> PIPE_ONLY=Set.of(ReactorParts.Kind.PIPE);
+    /** An existing pipe or surplus vent can become an absorber. */
+    private static final Set<ReactorParts.Kind> PIPE_OR_VENT=Set.of(
+            ReactorParts.Kind.PIPE,ReactorParts.Kind.VENT);
     /** Stable-search pitches. Anisotropic pairs let heat escape along a dense axis. */
     private static final int[][] PITCHES = {
             {3,3},{2,2},{4,4},{2,3},{3,2},{1,2},{2,1},{1,3},{3,1}
@@ -67,7 +82,7 @@ public final class ReactorDesigner {
     private record Cell(int x,int z) {}
     private record Footprint(int width,int length) {}
     private record RodBounds(int minX,int maxX,int minZ,int maxZ) {}
-    private record RodHeatGroup(List<Cell> cells,double average) {}
+    private record RodHeatGroup(List<Cell> cells,double average,int maximum) {}
     /**
      * Canonical 2D layout key. Transposed layouts normalise to the same key. This intentionally
      * accepts that the simulation's HashMap iteration order can differ by a few edge ticks after
@@ -172,18 +187,19 @@ public final class ReactorDesigner {
         }
 
         // Top-K refinement: mixed rod types, boundary/core swaps, cooling rings and atomic pipe + second ring.
-        if (best!=null && !stop.getAsBoolean()) {
+        if (best!=null && !stop.getAsBoolean() && System.nanoTime()<deadline) {
             var seeds=shortlist.top(SHORTLIST_SIZE);
             if (seeds.isEmpty()) seeds=List.of(best);
             var refinePool=new Budget(REFINE_BUDGET,deadline,stop);
-            var refineSeen=new HashSet<LayoutKey>();
             for (int i=0;i<seeds.size();i++) {
                 if (refinePool.exhausted()) break;
                 var seed=seeds.get(i);
                 long share=Math.max(1,refinePool.remaining()/Math.max(1,seeds.size()-i));
                 long perSeed=Math.min(refinePool.remaining(),share);
                 var refineBudget=refinePool.child(perSeed);
-                var refine=new Search(settings,fuel,coolant,request,refineBudget,resize,resize,null,refineSeen);
+                // Every seed gets its own dedupe storage: a pruned mutation of seed #1 must not
+                // hide an identical starting layout of seed #2.
+                var refine=Search.forRefinement(settings,fuel,coolant,request,refineBudget,resize);
                 refine.tryLayout(seed.layout().copy());
                 refineBest(seed,rods,vent,absorber,pipe,reflector,refine);
                 refinePool.absorb(refineBudget);
@@ -193,7 +209,7 @@ public final class ReactorDesigner {
         }
 
         // Temperature-guided local search on the current winner.
-        if (best!=null && !stop.getAsBoolean()) {
+        if (best!=null && !stop.getAsBoolean() && System.nanoTime()<deadline) {
             var localBudget=new Budget(LOCAL_BUDGET,deadline,stop);
             var local=new Search(settings,fuel,coolant,request,localBudget,resize,resize,null,null);
             local.best=best;
@@ -242,6 +258,9 @@ public final class ReactorDesigner {
             countHeight=ReactorSimulation.coolantAlignedHeight(countHeight,
                     Math.min(growthLimit(search.settings.maxSize()),countHeight+Math.max(1,countHeight/5)));
         for (int[] pitch : PITCHES) {
+            // On a square footprint the mirrored pitch only swaps the cooling axes; LayoutKey
+            // canonicalises that transpose, so the shared seen would reject it after simulation.
+            if (size.width()==size.length() && pitch[0]>pitch[1]) continue;
             boolean verticalChannels=pitch[1]>=pitch[0];
             searchGroups(size,rodGroups(size,pitch[0],pitch[1]),rods,coolers,pipe,reflector,
                     search,countHeight,verticalChannels);
@@ -302,7 +321,9 @@ public final class ReactorDesigner {
                                    ReactorParts.Part absorber,ReactorParts.Part pipe,
                                    ReactorParts.Part reflector,Search search) {
         if (seed==null || search.exhausted()) return;
-        Design current=seed;
+        // Start from the height-refined seed (the first tryLayout may already have lowered it),
+        // so early mutations do not silently reintroduce the old geometry.
+        Design current=refined(search,seed);
         for (var type : rods) {
             if (search.exhausted()) return;
             var layout=current.layout().copy();
@@ -502,49 +523,56 @@ public final class ReactorDesigner {
      * Short symmetric hill-climb guided by the temperatures of the current winner.
      * It upgrades cold rod groups and cools hot groups, one mirror-symmetric change per iteration.
      */
-    private static void localSearch(List<ReactorParts.Part> rods,ReactorParts.Part vent,
-                                    ReactorParts.Part absorber,ReactorParts.Part reflector,Search search) {
+    static void localSearch(List<ReactorParts.Part> rods,ReactorParts.Part vent,
+                            ReactorParts.Part absorber,ReactorParts.Part reflector,Search search) {
         if (search.best==null || search.exhausted()) return;
         var orderedRods=rods.stream().sorted(Comparator.comparingInt(ReactorParts.Part::rodCount)).toList();
         var mode=search.request.coolingMode();
-        int limit=(int)((long)search.settings.maxHeat()*search.request.risk().maximumHeatPercent/100);
         for (int iteration=0;iteration<LOCAL_ITERATIONS;iteration++) {
             if (search.exhausted()) return;
             var current=search.best;
             var groups=rodHeatGroups(current);
             if (groups.isEmpty()) return;
-            groups.sort(Comparator.comparingDouble(RodHeatGroup::average));
+            // The hottest cell, not the group average, limits a mirrored group.
+            groups.sort(Comparator.comparingInt(RodHeatGroup::maximum)
+                    .thenComparingDouble(RodHeatGroup::average));
             long target=search.request.target();
             boolean needMore=target==0 || current.exportRate()<target || search.adjustHeight;
-            boolean surplus=target>0 && current.exportRate()>target;
+            boolean surplus=target>0 && current.exportRate()>=target;
             var variants=new ArrayList<ReactorLayout>();
             if (needMore) {
-                if ((long)current.peakHeat()<limit) {
-                    // Upgrade cold groups at any safe temperature. Combined upgrade + cooling moves pay
-                    // for their extra block with a higher per-layer output and possibly a lower height.
-                    for (int i=0;i<Math.min(3,groups.size());i++) {
-                        var group=groups.get(i);
-                        addRodTypeVariant(variants,current,group,orderedRods,1);
-                        addAdjacentVariant(variants,current,group,reflector,Set.of(ReactorParts.Kind.EMPTY));
-                        if (mode!=CoolingMode.WITH_ICE)
-                            addCombinedUpgradeVariant(variants,current,group,orderedRods,vent);
-                        if (mode!=CoolingMode.PASSIVE)
-                            addCombinedUpgradeVariant(variants,current,group,orderedRods,absorber);
+                // Cold groups are offered upgrades regardless of how hot the hottest group is:
+                // one hot spot must not hide a cheap win elsewhere. Simulation decides whether
+                // the extra heat is acceptable.
+                for (int i=0;i<Math.min(3,groups.size());i++) {
+                    var group=groups.get(i);
+                    addRodTypeVariant(variants,current,group,orderedRods,1);
+                    // A cold rod with spare cooling can trade a surplus cooler for a reflector
+                    // without adding blocks or fuel.
+                    addAdjacentVariant(variants,current,group,reflector,REFLECTOR_TARGETS);
+                    if (mode!=CoolingMode.WITH_ICE)
+                        addCombinedUpgradeVariant(variants,current,group,orderedRods,vent);
+                    if (mode!=CoolingMode.PASSIVE)
+                        addCombinedUpgradeVariant(variants,current,group,orderedRods,absorber);
+                }
+                // Cooling moves run independently of the cold-group loop, including paired
+                // cooler + rod upgrade. Acceptance is left to the simulation.
+                for (int i=0;i<Math.min(3,groups.size());i++) {
+                    var group=groups.get(groups.size()-1-i);
+                    if (mode!=CoolingMode.WITH_ICE) {
+                        addAdjacentVariant(variants,current,group,vent,PIPE_ONLY);
+                        addCombinedUpgradeVariant(variants,current,group,orderedRods,vent);
                     }
-                } else {
-                    // At the heat ceiling, replace pipes/reflectors with active coolers to create headroom.
-                    for (int i=0;i<Math.min(3,groups.size());i++) {
-                        var group=groups.get(groups.size()-1-i);
-                        if (mode!=CoolingMode.WITH_ICE)
-                            addAdjacentVariant(variants,current,group,vent,
-                                    Set.of(ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR));
-                        if (mode!=CoolingMode.PASSIVE)
-                            addAdjacentVariant(variants,current,group,absorber,
-                                    Set.of(ReactorParts.Kind.PIPE,ReactorParts.Kind.REFLECTOR));
+                    if (mode!=CoolingMode.PASSIVE) {
+                        addAdjacentVariant(variants,current,group,absorber,PIPE_OR_VENT);
+                        addCombinedUpgradeVariant(variants,current,group,orderedRods,absorber);
                     }
                 }
-            } else if (surplus) {
-                // The target is already met with margin: save fuel, blocks and heat.
+            }
+            if (surplus) {
+                // The target is met (equality counts): ports can cap export while generation still
+                // has headroom to save fuel or blocks. The economy moves below may drop output, so
+                // better() must keep rejecting anything that falls under the target.
                 for (int i=0;i<Math.min(3,groups.size());i++) {
                     var group=groups.get(groups.size()-1-i);
                     addRodTypeVariant(variants,current,group,orderedRods,-1);
@@ -582,6 +610,7 @@ public final class ReactorDesigner {
         var upgraded=design.layout().copy();
         if (!fillGroup(upgraded,group.cells(),orderedRods.get(index+1),
                 part -> part.kind()==ReactorParts.Kind.ROD)) return;
+        var allowed=coolingUpgradeTargets(coolant.kind());
         var keys=new HashSet<String>();
         for (var cell : group.cells()) {
             for (var direction : DIRECTIONS) {
@@ -590,10 +619,16 @@ public final class ReactorDesigner {
                 var mirror=mirrorCells(design.layout(),x,z);
                 if (!keys.add(groupKey(mirror))) continue;
                 var candidate=upgraded.copy();
-                if (fillGroup(candidate,mirror,coolant,part -> part.kind()==ReactorParts.Kind.EMPTY))
+                if (fillGroup(candidate,mirror,coolant,part -> allowed.contains(part.kind())))
                     out.add(candidate);
             }
         }
+    }
+
+    private static Set<ReactorParts.Kind> coolingUpgradeTargets(ReactorParts.Kind coolant) {
+        if (coolant==ReactorParts.Kind.ABSORBER) return ABSORBER_UPGRADE_TARGETS;
+        if (coolant==ReactorParts.Kind.VENT) return VENT_UPGRADE_TARGETS;
+        return Set.of();
     }
 
     private static void addRemoveReflectorVariant(List<ReactorLayout> out,Design design,RodHeatGroup group) {
@@ -664,7 +699,7 @@ public final class ReactorDesigner {
         }
         var groups=new ArrayList<RodHeatGroup>();
         for (var cells : unique.values()) {
-            int sum=0, count=0;
+            int sum=0, count=0, maximum=0;
             boolean allRods=true;
             for (var cell : cells) {
                 var part=layout.get(cell.x(),cell.z());
@@ -672,10 +707,12 @@ public final class ReactorDesigner {
                     allRods=false;
                     break;
                 }
-                sum+=heat[cell.z()*width+cell.x()];
+                int value=heat[cell.z()*width+cell.x()];
+                sum+=value;
+                maximum=Math.max(maximum,value);
                 count++;
             }
-            if (allRods && count>0) groups.add(new RodHeatGroup(cells,(double)sum/count));
+            if (allRods && count>0) groups.add(new RodHeatGroup(cells,(double)sum/count,maximum));
         }
         return groups;
     }
@@ -973,37 +1010,37 @@ public final class ReactorDesigner {
     }
 
     /** Shared cell-tick and wall-clock budget. All phases draw from their own budget but share the deadline. */
-    private static final class Budget {
+    static final class Budget {
         private long remaining;
         private long spent;
         private final long deadline;
         private final BooleanSupplier cancelled;
 
-        private Budget(long remaining,long deadline,BooleanSupplier cancelled) {
+        Budget(long remaining,long deadline,BooleanSupplier cancelled) {
             this.remaining=remaining;
             this.deadline=deadline;
             this.cancelled=cancelled;
         }
 
-        private boolean exhausted() {
+        boolean exhausted() {
             return remaining<=0 || System.nanoTime()>=deadline
                     || cancelled.getAsBoolean() || Thread.currentThread().isInterrupted();
         }
 
-        private void spend(long amount) {
+        void spend(long amount) {
             remaining-=amount;
             spent+=amount;
         }
 
-        private long remaining() {
+        long remaining() {
             return remaining;
         }
 
-        private Budget child(long limit) {
+        Budget child(long limit) {
             return new Budget(Math.min(limit,remaining),deadline,cancelled);
         }
 
-        private void absorb(Budget child) {
+        void absorb(Budget child) {
             remaining=Math.max(0,remaining-child.spent);
         }
     }
@@ -1053,7 +1090,7 @@ public final class ReactorDesigner {
         return generated>ventCooling+absorbed;
     }
 
-    private static final class Search {
+    static final class Search {
         private final ReactorConfig settings;
         private final ReactorInputs.Fuel fuel;
         private final ItemStack coolant;
@@ -1062,12 +1099,15 @@ public final class ReactorDesigner {
         private final boolean refineHeight;
         private final Budget budget;
         private final Shortlist shortlist;
+        /** Cross-footprint/phase dedupe shared by the caller, or private storage when null. */
         private final Set<LayoutKey> seen;
-        private Design best,danger;
+        /** Per-instance dedupe so a footprint's start height is never treated as a candidate. */
+        private final Set<LayoutKey> localSeen=new HashSet<>();
+        Design best,danger;
 
-        private Search(ReactorConfig settings,ReactorInputs.Fuel fuel,ItemStack coolant,Request request,
-                       Budget budget,boolean adjustHeight,boolean refineHeight,Shortlist shortlist,
-                       Set<LayoutKey> seen) {
+        Search(ReactorConfig settings,ReactorInputs.Fuel fuel,ItemStack coolant,Request request,
+               Budget budget,boolean adjustHeight,boolean refineHeight,Shortlist shortlist,
+               Set<LayoutKey> seen) {
             this.settings=settings;
             this.fuel=fuel;
             this.coolant=coolant;
@@ -1079,12 +1119,24 @@ public final class ReactorDesigner {
             this.seen=seen==null ? new HashSet<>() : seen;
         }
 
+        /** Refinement search with private dedupe storage, so top-K seeds stay independent. */
+        static Search forRefinement(ReactorConfig settings,ReactorInputs.Fuel fuel,ItemStack coolant,
+                                    Request request,Budget budget,boolean resize) {
+            return new Search(settings,fuel,coolant,request,budget,resize,resize,null,null);
+        }
+
         boolean exhausted() { return budget.exhausted(); }
 
         void tryLayout(ReactorLayout layout) {
             if (exhausted()) return;
             int width=layout.width(), length=layout.length();
-            if (seen.contains(LayoutKey.of(layout))) return;
+            int initialHeight=layout.height();
+            var key=LayoutKey.of(layout);
+            // Each growth footprint starts at its minimum height, which is not a real candidate.
+            // Skip only same-instance repeats here; the shared fixed-phase seen must not veto the
+            // start geometry before adjustHeight turns it into a real candidate.
+            if (localSeen.contains(key) || (!adjustHeight && seen.contains(key))) return;
+            localSeen.add(key);
             budget.spend((long)width*length);
             var simulation=new ReactorSimulation(layout,settings,fuel,coolant);
             long perLayer=simulation.generationPerLayer();
@@ -1103,14 +1155,24 @@ public final class ReactorDesigner {
                     height=ReactorSimulation.coolantAlignedHeight(height,Math.min(maxHeight,height+Math.max(1,height/5)));
                 layout.setHeight(height,maxHeight);
             }
-            if (!seen.add(LayoutKey.of(layout))) return;
+            // Reuse the pre-adjust key when the height did not change (review 3.4).
+            boolean heightChanged=layout.height()!=initialHeight;
+            if (heightChanged) {
+                key=LayoutKey.of(layout);
+                if (localSeen.contains(key)) return;
+            }
+            if (seen.contains(key)) return;
+            if (heightChanged) localSeen.add(key);
             int height=layout.height();
             long generation=perLayer*height;
             long needed=request.target()>0 ? Math.min(request.target(),generation) : generation;
             layout.setEnergyPorts((int)Math.clamp(ceilDiv(needed,settings.maxEnergyOutputPerPort()),
                     1,ReactorLayout.maxEnergyPorts(width,length,height)));
             long export=Math.min(generation,(long)layout.energyPorts()*settings.maxEnergyOutputPerPort());
-            if (best!=null && export<best.exportRate() && (request.target()==0 || export<request.target())) return;
+            if (best!=null && export<best.exportRate() && (request.target()==0 || export<request.target())) {
+                if (!exhausted()) seen.add(key);
+                return;
+            }
 
             long shell=(long)(width+2)*(length+2)*(height+2)-(long)width*length*height;
             long buildBlocks=shell+(long)simulation.totalCells()*height;
@@ -1127,7 +1189,10 @@ public final class ReactorDesigner {
                     && (request.target()>0 || export==best.exportRate())
                     && (shapeCost(layout)>shapeCost(best.layout()) || shapeCost(layout)==shapeCost(best.layout())
                     && (fuelPerTick>best.fuelPerTick()
-                    || fuelPerTick==best.fuelPerTick() && buildBlocks>best.buildBlocks()))) return;
+                    || fuelPerTick==best.fuelPerTick() && buildBlocks>best.buildBlocks()))) {
+                if (!exhausted()) seen.add(key);
+                return;
+            }
 
             simulation.start();
             for (int tick=0;tick<MAX_TICKS && !exhausted();tick++) {
@@ -1139,6 +1204,9 @@ public final class ReactorDesigner {
                         > (long)settings.maxHeat()*request.risk().maximumHeatPercent) break;
             }
             var status=simulation.status();
+            // A candidate whose simulation was cut off by the budget is not a real result: keep
+            // its key out of the shared seen so a later footprint can still evaluate it fully.
+            if (!exhausted()) seen.add(key);
             int[] heat=new int[width*length];
             for (int z=0;z<length;z++) for (int x=0;x<width;x++) {
                 var cell=simulation.cell(x,z);

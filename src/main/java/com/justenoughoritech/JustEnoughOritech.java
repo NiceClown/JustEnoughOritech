@@ -10,6 +10,7 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.OnDatapackSyncEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
@@ -24,6 +25,7 @@ public final class JustEnoughOritech {
         com.justenoughoritech.printer.PrinterContent.register(modBus);
         modBus.addListener(RegisterPayloadHandlersEvent.class, this::registerPayloads);
         NeoForge.EVENT_BUS.addListener(this::onPlayerLogin);
+        NeoForge.EVENT_BUS.addListener(this::onDatapackSync);
         if (FMLEnvironment.getDist() == Dist.CLIENT) registerClient(modBus);
     }
 
@@ -50,5 +52,20 @@ public final class JustEnoughOritech {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         var result = ServerConfigReader.read(player.level().getServer());
         PacketDistributor.sendToPlayer(player, result);
+    }
+
+    /**
+     * Resend reactor data after a live {@code /reload}: recipes and coolant tags may have changed while
+     * players stay connected. A joining player is handled by {@link #onPlayerLogin}, so the joined-player
+     * form of this event is ignored and each connected player still receives exactly one snapshot per login.
+     */
+    private void onDatapackSync(OnDatapackSyncEvent event) {
+        if (event.getPlayer() != null) return;
+        var players = event.getRelevantPlayers().toList();
+        if (players.isEmpty()) return;
+        var server = players.getFirst().level().getServer();
+        if (server == null) return;
+        var payload = ServerConfigReader.read(server);
+        for (var player : players) PacketDistributor.sendToPlayer(player, payload);
     }
 }
