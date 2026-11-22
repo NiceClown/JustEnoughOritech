@@ -81,9 +81,7 @@ public final class JEIPlugin implements IModPlugin {
         }
         @Override public void createRecipeExtras(mezz.jei.api.gui.widgets.IRecipeExtrasBuilder builder,
                                                   SimulatorRecipe recipe, IFocusGroup focuses) {
-            var widget = new SimulatorWidget();
-            builder.addWidget(widget);
-            builder.addGuiEventListener(widget);
+            builder.addWidget(new SimulatorWidget());
         }
     }
 }

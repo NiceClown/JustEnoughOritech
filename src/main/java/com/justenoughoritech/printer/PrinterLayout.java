@@ -29,6 +29,11 @@ public record PrinterLayout(int width, int length, int height, int ports, List<S
     }
 
     public ReactorLayout resolve(int maxSize) {
+        var layout = resolveDraft(maxSize);
+        return layout != null && layout.validationErrors(Math.min(maxSize,LIMIT)).isEmpty() ? layout : null;
+    }
+
+    public ReactorLayout resolveDraft(int maxSize) {
         int limit = Math.min(maxSize,LIMIT);
         if (width<1 || length<1 || height<1 || width>limit || length>limit || height>limit
                 || ports<1 || ports>ReactorLayout.maxEnergyPorts(width,length,height)
@@ -43,7 +48,7 @@ public record PrinterLayout(int width, int length, int height, int ports, List<S
             if (part == null) return null;
             layout.set(x,z,part);
         }
-        return layout.validationErrors(limit).isEmpty() ? layout : null;
+        return layout;
     }
 
     public static PrinterLayout decode(RegistryFriendlyByteBuf buf) {

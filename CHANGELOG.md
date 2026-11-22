@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.5 — keybind and in-pack UI fix release
+
+Just Enough Oritech by **NiceClown**.
+
+This release changes the simulator shortcut to **K**, migrates the old **J** binding once, and includes the 0.5.4 layout tools and input-routing work. 0.5.5 supersedes 0.5.3 and the local 0.5.4 build.
+
+### Keybind
+
+- The default **Open reactor simulator** key is now **K** instead of **J**. J collided with JourneyMap, ToastControl, Witchery, Advanced AE and other mods in large packs.
+- Existing profiles with the old J binding are migrated once to K and saved. Custom player bindings other than J are left untouched.
+- README and the in-game key category now refer to K.
+
+### Simulator and layout tools
+
+- Mouse input is routed to the visible simulator controls before JEI uses it for recipe navigation. The core editor, wheel panning and material scrollbar use the rendered viewport.
+- Added the **Layout** screen: exact core dimensions and port count, repeating the core along both horizontal axes, adding or trimming rows and columns, and copying or pasting blueprints as JSON.
+- Layout changes are validated against the server's block limit and the maximum number of energy ports. Replacing the core requires confirmation.
+- The simulator continues to use the server's Oritech configuration and recipes; no client-side config values are used.
+
+### Tests and pack verification
+
+- Added a regression test for `ReactorLayout.tile()`: it checks both axes, the repeated cell pattern, and rejection of zero or oversized copy counts.
+- **27 automated tests** pass, including planner targets from 10 to 1,000,000 RF/t, layout tiling, client lifecycle and the simulation stability detector.
+- The full planner matrix was re-run on 0.5.5: **72/72** combinations of 3 risk modes, 3 cooling modes and 8 targets from 10 to 100,000,000 RF/t returned a safe `STEADY` design.
+- ATM11 and FTB Evolution 2 were re-tested in fresh isolated copies with the real client and JEI. Buttons were clicked through the actual screen input path. Both packs passed; ATM11 reached 100,000 RF/t with a 7×7×8 core, FTB Evolution 2 reached 51,072 RF/t with an 8×8×8 core.
+
+### Compatibility
+
+- Minecraft **26.1.2**, NeoForge **26.1.2.109+**, Java **25**.
+- Oritech **2.0.0-exp12** and **2.0.0-exp14**; JEI **29.53.0.115** verified.
+- Client and server both need the mod.
+
+## 0.5.4
+
+Just Enough Oritech by **NiceClown**.
+
+- Route mouse input to the visible reactor simulator controls before JEI can consume it for recipe navigation. The editor, wheel panning, and material scrollbar use the rendered viewport.
+- Added a layout tools screen for exact core dimensions and port counts, repeating patterns along both axes, adding or trimming rows and columns, and sharing blueprints as JSON.
+- The simulator continues to use the server's Oritech configuration and recipes.
+
 ## 0.5.3 — planner and client lifecycle fix release
 
 Just Enough Oritech by **NiceClown**.

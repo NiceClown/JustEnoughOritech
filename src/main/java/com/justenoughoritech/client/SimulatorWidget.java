@@ -4,7 +4,6 @@ import com.justenoughoritech.sim.ReactorLayout;
 import com.justenoughoritech.sim.ReactorParts;
 import com.justenoughoritech.sim.ReactorSimulation;
 import mezz.jei.api.gui.builder.ITooltipBuilder;
-import mezz.jei.api.gui.inputs.IJeiGuiEventListener;
 import mezz.jei.api.gui.widgets.IRecipeWidget;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -23,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.IntConsumer;
 
-public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListener {
+public final class SimulatorWidget implements IRecipeWidget {
     private static final int W = 420, H = 230, CELL = 17, GX = 6, GY = 40, GRID = 5;
     private static final int LIST_TOP = 165, LIST_HEIGHT = 59, LIST_ROWS = 5;
     private static final int EYE_X=244, EYE_Y=29;
@@ -34,17 +33,23 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
     private static final Identifier BUTTON = Identifier.withDefaultNamespace("widget/button");
     private static final Identifier HOVER = Identifier.withDefaultNamespace("widget/button_highlighted");
     private static final Identifier DISABLED = Identifier.withDefaultNamespace("widget/button_disabled");
-    private static GridViewport gridViewport;
+    private static Viewport viewport;
+    private static Viewport scrollbarDrag;
     private final float scale;
     private final TextViewport textViewport = new TextViewport();
     private int previewRevision = -1;
     private int previewLayer = -2;
     private List<ReactorLayout.Placement> blueprint = List.of();
     private List<ReactorLayout.Placement> preview = List.of();
-    private boolean draggingBar;
+    private record Viewport(Screen screen, SimulatorWidget widget, ScreenRectangle clip,
+                            float left, float top, float scaleX, float scaleY) {
+        boolean contains(Screen screen, double x, double y) {
+            return this.screen == screen && clip != null
+                    && clip.containsPoint((int)Math.floor(x), (int)Math.floor(y));
+        }
 
-    private record GridViewport(Screen screen,double left,double top,double right,double bottom) {
-        boolean contains(double x,double y) { return x>=left && x<right && y>=top && y<bottom; }
+        double x(double mouseX) { return (mouseX-left)/scaleX; }
+        double y(double mouseY) { return (mouseY-top)/scaleY; }
     }
 
     public SimulatorWidget() { this(displayScale()); }
@@ -59,7 +64,6 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
     public static int displayWidth() { return (int)Math.ceil(W * displayScale()); }
     public static int displayHeight() { return (int)Math.ceil(H * displayScale()); }
     @Override public ScreenPosition getPosition() { return new ScreenPosition(0,0); }
-    @Override public ScreenRectangle getArea() { return new ScreenRectangle(0,0,(int)Math.ceil(W*scale),(int)Math.ceil(H*scale)); }
 
     static Component tr(String key, Object... args) {
         return Component.translatable("gui.just_enough_oritech." + key, args);
@@ -72,11 +76,10 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         pose.pushMatrix();
         pose.scale(scale);
         try {
-            gridViewport=new GridViewport(Minecraft.getInstance().screen,
-                    pose.m20()+GX*pose.m00(),pose.m21()+GY*pose.m11(),
-                    pose.m20()+(GX+GRID*CELL)*pose.m00(),pose.m21()+(GY+GRID*CELL)*pose.m11());
             graphics.enableScissor(0,0,W,H);
             try {
+                viewport = new Viewport(Minecraft.getInstance().screen, this, graphics.peekScissorStack(),
+                        pose.m20(), pose.m21(), pose.m00(), pose.m11());
                 drawEditor(graphics);
                 for (var button : buttons()) button.draw(graphics,textViewport,mouseX/scale,mouseY/scale);
                 drawEye(graphics);
@@ -88,16 +91,38 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         }
     }
 
-    static void clearGridViewport(ScreenEvent.Render.Pre event) {
-        gridViewport=null;
+    static void clearViewport(ScreenEvent.Render.Pre event) {
+        viewport = null;
+        if (scrollbarDrag != null && scrollbarDrag.screen() != event.getScreen()) scrollbarDrag = null;
     }
 
-    static void handleGridScroll(ScreenEvent.MouseScrolled.Pre event) {
-        var viewport=gridViewport;
-        // JEI handles category navigation before it offers the wheel to recipe widgets.
-        if (viewport!=null && event.getScreen()==viewport.screen()
-                && viewport.contains(event.getMouseX(),event.getMouseY())
-                && panGrid(event.getScrollDeltaX(),event.getScrollDeltaY())) event.setCanceled(true);
+    // Use the same visible bounds as the widget before JEI routes input to its navigation and overlays.
+    static void handlePress(ScreenEvent.MouseButtonPressed.Pre event) {
+        var view = viewport;
+        if (view == null || !view.contains(event.getScreen(), event.getMouseX(), event.getMouseY())) return;
+        double x = view.x(event.getMouseX()), y = view.y(event.getMouseY());
+        if (event.getButton() == 0 && list(x,y) && x >= 406) scrollbarDrag = view;
+        if (view.widget().click(x,y,event.getButton())) event.setCanceled(true);
+    }
+
+    static void handleRelease(ScreenEvent.MouseButtonReleased.Pre event) {
+        if (scrollbarDrag == null || event.getButton() != 0) return;
+        if (scrollbarDrag.screen() == event.getScreen()) event.setCanceled(true);
+        scrollbarDrag = null;
+    }
+
+    static void handleDrag(ScreenEvent.MouseDragged.Pre event) {
+        var drag = scrollbarDrag;
+        if (drag == null || drag.screen() != event.getScreen() || event.getMouseButton() != 0) return;
+        drag.widget().scrollBar(drag.y(event.getMouseY()));
+        event.setCanceled(true);
+    }
+
+    static void handleScroll(ScreenEvent.MouseScrolled.Pre event) {
+        var view = viewport;
+        if (view != null && view.contains(event.getScreen(), event.getMouseX(), event.getMouseY())
+                && view.widget().scroll(view.x(event.getMouseX()),view.y(event.getMouseY()),
+                event.getScrollDeltaX(),event.getScrollDeltaY())) event.setCanceled(true);
     }
 
     private void drawEditor(GuiGraphicsExtractor g) {
@@ -124,7 +149,7 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         text(g,GX,192,96,tr("layer_number",WB.selectedLayer+1,WB.layout.height()),MUTED);
         text(g,GX,203,96,tr("ports",WB.layout.energyPorts()),MUTED);
 
-        text(g,110,31,128,tr(WB.layersMode ? "preview_layer" : "preview_3d"),LIGHT);
+        text(g,110,31,70,tr(WB.layersMode ? "preview_layer" : "preview_3d"),LIGHT);
         int editWidth=Math.min(GRID,WB.layout.width()-WB.gridOffsetX);
         int editLength=Math.min(GRID,WB.layout.length()-WB.gridOffsetZ);
         text(g,110,43,148,tr("edit_area_coords",WB.gridOffsetX+1,WB.gridOffsetX+editWidth,
@@ -355,6 +380,10 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         controls.add(arrow(24,213,">","layer_next",() -> layer(1)));
         controls.add(stepControl(51,213,"port_minus",step -> ports(-step)));
         controls.add(stepControl(75,213,"port_plus",this::ports));
+        controls.add(control(182,29,59,"layout_tools",() -> {
+            var mc = Minecraft.getInstance();
+            mc.setScreen(new LayoutToolsScreen(mc.screen));
+        }));
         controls.add(new Control(EYE_X,EYE_Y,14,13,Component.empty(),
                 tr(WB.showEditArea ? "edit_area_hide" : "edit_area_show"),true,() -> WB.showEditArea=!WB.showEditArea));
         controls.add(arrow(270,50,"<","fuel_previous",() -> fuel(-1)));
@@ -439,8 +468,7 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         }
     }
 
-    @Override public boolean mouseClicked(double mx,double my,int button) {
-        double x = mx/scale, y = my/scale;
+    private boolean click(double x,double y,int button) {
         if ((button==0 || button==1) && grid(x,y)) {
             int cx = WB.gridOffsetX+(int)(x-GX)/CELL, cz = WB.gridOffsetZ+(int)(y-GY)/CELL;
             if (cx<WB.layout.width() && cz<WB.layout.length()) {
@@ -453,7 +481,6 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         }
         if (button != 0) return false;
         if (list(x,y) && x>=406) {
-            draggingBar = true;
             scrollBar(y);
             return true;
         }
@@ -464,20 +491,7 @@ public final class SimulatorWidget implements IRecipeWidget, IJeiGuiEventListene
         return false;
     }
 
-    @Override public boolean mouseDragged(double x,double y,int button,double dx,double dy) {
-        if (!draggingBar || button!=0) return false;
-        scrollBar(y/scale);
-        return true;
-    }
-
-    @Override public boolean mouseReleased(double x,double y,int button) {
-        if (!draggingBar || button!=0) return false;
-        draggingBar = false;
-        return true;
-    }
-
-    @Override public boolean mouseScrolled(double mx,double my,double dx,double dy) {
-        double x=mx/scale,y=my/scale;
+    private boolean scroll(double x,double y,double dx,double dy) {
         if (grid(x,y)) {
             return panGrid(dx,dy);
         }

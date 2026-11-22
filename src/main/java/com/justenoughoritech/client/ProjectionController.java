@@ -64,7 +64,7 @@ public final class ProjectionController {
         lockKey=register(event,"lock_projection",GLFW.GLFW_KEY_Y,category);
         cancelKey=register(event,"cancel_projection",GLFW.GLFW_KEY_N,category);
         rotateKey=register(event,"rotate_projection",GLFW.GLFW_KEY_R,category);
-        openKey=register(event,"open_simulator",GLFW.GLFW_KEY_J,category);
+        openKey=register(event,"open_simulator",GLFW.GLFW_KEY_K,category);
     }
 
     private static KeyMapping register(RegisterKeyMappingsEvent event,String name,int key,KeyMapping.Category category) {
@@ -157,11 +157,12 @@ public final class ProjectionController {
 
     @SubscribeEvent public static void tick(ClientTickEvent.Post event) {
         var client=Minecraft.getInstance();
-        if (!migratedKeys && lockKey!=null && cancelKey!=null) {
+        if (!migratedKeys && lockKey!=null && cancelKey!=null && openKey!=null) {
             migratedKeys=true;
             boolean lockChanged=migrateKey(lockKey,GLFW.GLFW_KEY_L);
             boolean cancelChanged=migrateKey(cancelKey,GLFW.GLFW_KEY_K);
-            if (lockChanged || cancelChanged) {
+            boolean openChanged=migrateKey(openKey,GLFW.GLFW_KEY_J);
+            if (lockChanged || cancelChanged || openChanged) {
                 KeyMapping.resetMapping();
                 client.options.save();
             }

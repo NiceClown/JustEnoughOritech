@@ -45,6 +45,24 @@ public final class ReactorLayout {
         setEnergyPorts(energyPorts);
     }
 
+    /** Repeat the entire core on the horizontal plane. Height and power ports stay as set. */
+    public boolean tile(int xCopies, int zCopies, int max) {
+        if (xCopies < 1 || zCopies < 1 || xCopies > max / width || zCopies > max / length) return false;
+        int newWidth = width * xCopies;
+        int newLength = length * zCopies;
+        var tiled = new ReactorParts.Part[newWidth * newLength];
+        for (int z = 0; z < newLength; z++) {
+            int source = (z % length) * width;
+            for (int x = 0; x < xCopies; x++) {
+                System.arraycopy(cells, source, tiled, z * newWidth + x * width, width);
+            }
+        }
+        width = newWidth;
+        length = newLength;
+        cells = tiled;
+        return true;
+    }
+
     public ReactorLayout copy() {
         var copy = new ReactorLayout();
         copy.replaceWith(this);

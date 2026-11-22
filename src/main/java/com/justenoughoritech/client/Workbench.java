@@ -145,6 +145,8 @@ public final class Workbench {
         gridOffsetX = Math.min(gridOffsetX, Math.max(0, layout.width() - 5));
         gridOffsetZ = Math.min(gridOffsetZ, Math.max(0, layout.length() - 5));
         selectedLayer = Math.min(selectedLayer, layout.height() - 1);
+        cursorX = Math.min(cursorX, layout.width() - 1);
+        cursorZ = Math.min(cursorZ, layout.length() - 1);
     }
 
     public void autoDesign(ReactorDesigner.Request request,
