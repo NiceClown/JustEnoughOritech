@@ -7,6 +7,7 @@ import java.util.Map;
 
 /** Fingerprints the reactor classes shared by Oritech 2.0.0-exp12 and 2.0.0-exp14 (heat, pulses and resource timing). */
 public final class PhysicsCompatibility {
+    static final String CONTROLLER_CLASS = "rearth.oritech.block.entity.reactor.NuclearReactorControllerBlockEntity";
     private static final Map<String,String> EXP12=Map.ofEntries(
             Map.entry("rearth/oritech/block/entity/reactor/NuclearReactorControllerBlockEntity.class","10ca6782cbb23c784f3b226b1f0f69ca8014c1743bede8eb38ddc438a06a9453"),
             Map.entry("rearth/oritech/block/entity/reactor/ReactorFuelPortEntity.class","f6a02c6290be4cf8982352af5f62a88aae0ee0ef780eb69380fc449fb341d3e6"),
@@ -26,10 +27,18 @@ public final class PhysicsCompatibility {
 
     private PhysicsCompatibility(){}
 
+    static Map<String,String> expectedFingerprints(){return EXP12;}
+
     public static boolean matchesExp12(){
         try{
-            ClassLoader loader=Class.forName("rearth.oritech.block.entity.reactor.NuclearReactorControllerBlockEntity",
-                    false,Thread.currentThread().getContextClassLoader()).getClassLoader();
+            ClassLoader loader=resolveControllerLoader();
+            return matchesExp12(loader);
+        }catch(Exception|LinkageError exception){return false;}
+    }
+
+    static boolean matchesExp12(ClassLoader loader){
+        if(loader==null)return false;
+        try{
             MessageDigest sha=MessageDigest.getInstance("SHA-256");
             for(var entry:EXP12.entrySet()){
                 try(InputStream stream=loader.getResourceAsStream(entry.getKey())){
@@ -39,6 +48,18 @@ public final class PhysicsCompatibility {
                 }
             }
             return true;
-        }catch(Exception exception){return false;}
+        }catch(Exception|LinkageError exception){return false;}
+    }
+
+    private static ClassLoader resolveControllerLoader() throws ClassNotFoundException {
+        ClassLoader tccl=Thread.currentThread().getContextClassLoader();
+        if(tccl!=null){
+            try{
+                return Class.forName(CONTROLLER_CLASS,false,tccl).getClassLoader();
+            }catch(ClassNotFoundException ignored){
+                // Fall back to the mod classloader when invoked from a thread without NeoForge's TCCL.
+            }
+        }
+        return Class.forName(CONTROLLER_CLASS,false,PhysicsCompatibility.class.getClassLoader()).getClassLoader();
     }
 }
