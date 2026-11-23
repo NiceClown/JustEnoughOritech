@@ -165,13 +165,14 @@ class ReactorLayoutTest {
         layout.set(1, 1, SINGLE);
         assertTrue(layout.validationErrors(64).isEmpty());
 
-        // Exactly at limit 64 is valid, 65 exceeds limit 64.
+        // Exactly at limit 64 on every axis and exact maxEnergyPorts produces zero errors.
         var atLimit = new ReactorLayout();
-        atLimit.resize(64, 1, 64);
-        atLimit.setHeight(1, 64);
+        atLimit.resize(14, 14, 14);
+        atLimit.setHeight(14, 14);
+        atLimit.setEnergyPorts(ReactorLayout.maxEnergyPorts(14, 14, 14));
         atLimit.set(0, 0, SINGLE);
-        assertTrue(atLimit.validationErrors(64).isEmpty());
-        assertTrue(atLimit.validationErrors(63).contains("gui.just_enough_oritech.dimensions"));
+        assertTrue(atLimit.validationErrors(14).isEmpty());
+        assertTrue(atLimit.validationErrors(13).contains("gui.just_enough_oritech.dimensions"));
 
         // Height or length exceeding max also triggers dimensions error.
         var tall = new ReactorLayout();
@@ -237,7 +238,30 @@ class ReactorLayoutTest {
             }
             int expectedTotal = (s[0] + 2) * (s[1] + 2) * (s[2] + 2) - emptyCells * s[2];
             assertEquals(expectedTotal, placements.size());
+
+            // Vertical outer corners are ALWAYS WALL, never ENERGY_PORT or CONTROLLER, even at max ports.
+            for (int y = 0; y <= s[2] + 1; y++) {
+                assertEquals(ReactorLayout.WALL, byPos.get("0," + y + ",0"));
+                assertEquals(ReactorLayout.WALL, byPos.get((s[0] + 1) + "," + y + ",0"));
+                assertEquals(ReactorLayout.WALL, byPos.get("0," + y + "," + (s[1] + 1)));
+                assertEquals(ReactorLayout.WALL, byPos.get((s[0] + 1) + "," + y + "," + (s[1] + 1)));
+            }
         }
+    }
+
+    @Test
+    void onShellChecksEverySingleFaceAndRejectsInteriorCells() {
+        // Interior cells (not touching any of the 6 outer faces) must return false.
+        assertFalse(ReactorLayout.onShell(new ReactorLayout.Placement(1, 1, 1, ReactorLayout.WALL), 3, 3, 3));
+        assertFalse(ReactorLayout.onShell(new ReactorLayout.Placement(2, 2, 2, ReactorLayout.WALL), 3, 3, 3));
+        assertFalse(ReactorLayout.onShell(new ReactorLayout.Placement(3, 3, 3, ReactorLayout.WALL), 3, 3, 3));
+        // Each of the 6 outer faces individually, with the other two coordinates strictly interior (2).
+        assertTrue(ReactorLayout.onShell(new ReactorLayout.Placement(0, 2, 2, ReactorLayout.WALL), 3, 3, 3));
+        assertTrue(ReactorLayout.onShell(new ReactorLayout.Placement(4, 2, 2, ReactorLayout.WALL), 3, 3, 3));
+        assertTrue(ReactorLayout.onShell(new ReactorLayout.Placement(2, 0, 2, ReactorLayout.WALL), 3, 3, 3));
+        assertTrue(ReactorLayout.onShell(new ReactorLayout.Placement(2, 4, 2, ReactorLayout.WALL), 3, 3, 3));
+        assertTrue(ReactorLayout.onShell(new ReactorLayout.Placement(2, 2, 0, ReactorLayout.WALL), 3, 3, 3));
+        assertTrue(ReactorLayout.onShell(new ReactorLayout.Placement(2, 2, 4, ReactorLayout.WALL), 3, 3, 3));
     }
 
     @ParameterizedTest
@@ -344,6 +368,16 @@ class ReactorLayoutTest {
         assertEquals(2, layout.length());
         assertEquals(5, layout.height());
         assertEquals(12, layout.energyPorts());
+
+        // Single-axis exact boundary (xCopies == 1 or zCopies == 1) and exact max / dim boundary.
+        var singleAxis = new ReactorLayout();
+        singleAxis.resize(3, 2, 64);
+        assertTrue(singleAxis.tile(1, 3, 6), "zCopies == max/length == 3 and xCopies == 1 must succeed");
+        assertEquals(3, singleAxis.width());
+        assertEquals(6, singleAxis.length());
+        assertTrue(singleAxis.tile(2, 1, 6), "xCopies == max/width == 2 and zCopies == 1 must succeed");
+        assertEquals(6, singleAxis.width());
+        assertEquals(6, singleAxis.length());
 
         assertTrue(layout.tile(2, 3, 64));
         assertEquals(6, layout.width());

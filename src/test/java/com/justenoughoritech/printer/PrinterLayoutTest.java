@@ -101,8 +101,17 @@ class PrinterLayoutTest {
         assertNull(new PrinterLayout(15, 1, 1, 1, Collections.nCopies(15, SINGLE.id())).resolveDraft(14, PARTS));
         assertNull(new PrinterLayout(1, 15, 1, 1, Collections.nCopies(15, SINGLE.id())).resolveDraft(14, PARTS));
         assertNull(new PrinterLayout(1, 1, 15, 1, oneRod).resolveDraft(14, PARTS));
+        // Exact upper-bound valid dimensions (64 on each axis individually & max ports).
+        assertNotNull(new PrinterLayout(64, 1, 1, 1, Collections.nCopies(64, SINGLE.id())).resolve(64, PARTS));
+        assertNotNull(new PrinterLayout(1, 64, 1, 1, Collections.nCopies(64, SINGLE.id())).resolve(64, PARTS));
+        assertNotNull(new PrinterLayout(1, 1, 64, 1, oneRod).resolve(64, PARTS));
+        // Invalid draft propagates null through resolve().
+        assertNull(new PrinterLayout(0, 1, 1, 1, List.of()).resolve(64, PARTS));
+
         // Exceeds LIMIT=64 even if server maxSize claims 66
         assertNull(new PrinterLayout(65, 1, 1, 1, Collections.nCopies(65, SINGLE.id())).resolveDraft(66, PARTS));
+        assertNull(new PrinterLayout(1, 65, 1, 1, Collections.nCopies(65, SINGLE.id())).resolveDraft(66, PARTS));
+        assertNull(new PrinterLayout(1, 1, 65, 1, oneRod).resolveDraft(66, PARTS));
         // Ports bounds: 1x1x1 allows max 3 ports
         assertNull(new PrinterLayout(1, 1, 1, 0, oneRod).resolveDraft(64, PARTS));
         assertNotNull(new PrinterLayout(1, 1, 1, 3, oneRod).resolveDraft(64, PARTS));
@@ -203,6 +212,23 @@ class PrinterLayoutTest {
         badIndex.writeUtf("", 128);
         badIndex.writeByte(1); // >= palette size 1
         assertThrows(IllegalArgumentException.class, () -> PrinterLayout.decode(badIndex));
+
+        // Exact 1x1x1 and 64-on-single-axis round-trips on binary wire (kills decode/encode boundary mutants).
+        var minPlan = new PrinterLayout(1, 1, 1, 1, List.of(SINGLE.id()));
+        var bMin = buf();
+        minPlan.encode(bMin);
+        assertEquals(minPlan, PrinterLayout.decode(bMin));
+        assertEquals(0, bMin.readableBytes());
+
+        // encode rejects every invalid dimension/port individually
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(0, 1, 1, 1, List.of()).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(65, 1, 1, 1, Collections.nCopies(65, "")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 0, 1, 1, List.of()).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 65, 1, 1, Collections.nCopies(65, "")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 0, 1, List.of("")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 65, 1, List.of("")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 1, 0, List.of("")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 1, 4, List.of("")).encode(buf()));
 
         // encode rejects mismatched cell size, null cells, and >32 distinct palette ids
         assertThrows(IllegalArgumentException.class,

@@ -142,22 +142,26 @@ class ClientComponentsTest {
         assertEquals(0, TextViewport.scrollOffsetAt(5_000, 0, 0.024));
         assertEquals(0, TextViewport.scrollOffsetAt(5_000, -5, 0.024));
         assertEquals(0, TextViewport.scrollOffsetAt(5_000, 50, 0));
+        assertEquals(0, TextViewport.scrollOffsetAt(5_000, 50, -0.1));
         assertEquals(0, TextViewport.scrollOffsetAt(0, 50, 0.024));
         assertEquals(0, TextViewport.scrollOffsetAt(-100, 50, 0.024));
 
         // max = 100, speed = 0.1 px/ms -> travel = 1000 ms, hold = 1200 ms, full cycle = 4400 ms.
         double speed = 0.1;
         int max = 100;
-        assertEquals(0, TextViewport.scrollOffsetAt(0, max, speed));
+        assertEquals(0, TextViewport.scrollOffsetAt(1, max, speed));
         assertEquals(0, TextViewport.scrollOffsetAt(1199, max, speed));
         assertEquals(0, TextViewport.scrollOffsetAt(1200, max, speed));
+        assertEquals(1, TextViewport.scrollOffsetAt(1210, max, speed));
         assertEquals(50, TextViewport.scrollOffsetAt(1700, max, speed));
         assertEquals(99, TextViewport.scrollOffsetAt(2199, max, speed));
         // End hold [2200, 3400)
         assertEquals(100, TextViewport.scrollOffsetAt(2200, max, speed));
+        assertEquals(100, TextViewport.scrollOffsetAt(2800, max, speed));
         assertEquals(100, TextViewport.scrollOffsetAt(3399, max, speed));
         // Reverse travel [3400, 4400)
         assertEquals(100, TextViewport.scrollOffsetAt(3400, max, speed));
+        assertEquals(99, TextViewport.scrollOffsetAt(3410, max, speed));
         assertEquals(50, TextViewport.scrollOffsetAt(3900, max, speed));
         assertEquals(1, TextViewport.scrollOffsetAt(4390, max, speed));
         // Full wrap at 4400 ms -> back to 0
@@ -175,6 +179,11 @@ class ClientComponentsTest {
         wb.selectedLayer = 7;
         wb.cursorX = 9;
         wb.cursorZ = 9;
+        wb.simulation = new ReactorSimulation(wb.layout, ReactorConfig.DEFAULT,
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY);
+        wb.running = true;
+        wb.issue = "gui.just_enough_oritech.need_rod";
+        wb.designStatus = Component.literal("old");
         int revBefore = wb.revision();
 
         wb.layout.resize(3, 4, 64);
@@ -236,8 +245,16 @@ class ClientComponentsTest {
         assertEquals("gui.just_enough_oritech.auto_found",
                 ((TranslatableContents) wb.designStatus.getContents()).getKey());
 
+        // Target == 0 and exact exportRate == target both report auto_found (not auto_goal_missed).
+        wb.applyDesign(safeDesign, 0);
+        assertEquals("gui.just_enough_oritech.auto_found",
+                ((TranslatableContents) wb.designStatus.getContents()).getKey());
+        wb.applyDesign(safeDesign, 5000);
+        assertEquals("gui.just_enough_oritech.auto_found",
+                ((TranslatableContents) wb.designStatus.getContents()).getKey());
+
         // Safe design that missed a higher target sets auto_goal_missed.
-        wb.applyDesign(safeDesign, 10_000);
+        wb.applyDesign(safeDesign, 5001);
         assertEquals("gui.just_enough_oritech.auto_goal_missed",
                 ((TranslatableContents) wb.designStatus.getContents()).getKey());
 
@@ -252,15 +269,34 @@ class ClientComponentsTest {
     @Test
     void workbenchTickPauseResetAndCancelAutoDesignLifecycle() {
         var wb = Workbench.INSTANCE;
+        // pause() and tick() when simulation == null are safe no-ops.
+        wb.running = true;
+        wb.tick();
+        assertTrue(wb.running);
+        wb.pause();
+        assertFalse(wb.running);
+
+        // Uncooled rod stays RUNNING for >10 ticks: verifies exact speed stepping, !running no-op, and running stays true.
         wb.layout.set(1, 1, SINGLE);
+        wb.simulation = new ReactorSimulation(wb.layout, ReactorConfig.DEFAULT,
+                new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY);
+        wb.simulation.start();
+        wb.running = false;
+        wb.speed = 2;
+        wb.tick();
+        assertEquals(0, wb.simulation.ticks(), "tick() must do nothing while !running");
+        wb.running = true;
+        wb.tick();
+        assertEquals(2, wb.simulation.ticks(), "speed=2 must advance exactly 2 ticks");
+        assertTrue(wb.running, "running must remain true while simulation is still RUNNING");
+
+        // Cooled rod ticks until steady automatically stops wb.running.
         wb.layout.set(1, 0, VENT);
         wb.simulation = new ReactorSimulation(wb.layout, ReactorConfig.DEFAULT,
                 new ReactorInputs.Fuel(ItemStack.EMPTY, 10_000), ItemStack.EMPTY);
         wb.simulation.start();
         wb.running = true;
         wb.speed = 2;
-
-        // Running ticks until steady automatically stops wb.running.
         for (int i = 0; i < 10 && wb.running; i++) wb.tick();
         assertFalse(wb.running);
         assertEquals(ReactorSimulation.Status.STEADY, wb.simulation.status());
@@ -317,13 +353,14 @@ class ClientComponentsTest {
         assertFalse(wb.running);
         assertNull(wb.simulation);
 
-        // Incompatible server payload marks client INCOMPATIBLE and sets issue.
+        // Incompatible server payload marks client INCOMPATIBLE, sets issue, and updates runtimeCheck.
         var bad = payload("2.0.0-exp14", false, 64, 2000, "gui.just_enough_oritech.no_fuel");
         ClientRuntimeConfig.accept(bad);
         wb.refreshInputs();
         assertEquals("gui.just_enough_oritech.no_fuel", wb.issue);
         assertFalse(wb.inputs.available());
         assertEquals(ClientRuntimeConfig.Compatibility.INCOMPATIBLE, ClientRuntimeConfig.compatibility());
+        assertEquals("gui.just_enough_oritech.no_fuel", ClientRuntimeConfig.runtimeIssue());
 
         // Caching skips redundant work when same snapshot and force == false, re-evaluates when force == true.
         wb.issue = "cleared";

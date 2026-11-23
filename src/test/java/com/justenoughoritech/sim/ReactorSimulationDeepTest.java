@@ -163,6 +163,8 @@ class ReactorSimulationDeepTest {
         int finalTicks = sim.ticks();
         sim.pause(); // cannot leave terminal state
         assertEquals(ReactorSimulation.Status.MELTDOWN, sim.status());
+        sim.start(); // start() must not resurrect a MELTDOWN simulation
+        assertEquals(ReactorSimulation.Status.MELTDOWN, sim.status());
         sim.tick(); // no-op in terminal state
         assertEquals(finalTicks, sim.ticks());
 
@@ -233,13 +235,9 @@ class ReactorSimulationDeepTest {
         assertTrue(sim10.steadyCoolantPerSecond() > 0.0 && sim10.steadyCoolantPerSecond() <= 0.2001,
                 "unexpected coolant rate: " + sim10.steadyCoolantPerSecond());
 
-        // Height = 100 with a hotter rod (always heat > 0) consumes 1 item every 10 ticks = 2.0 items/s!
-        var hotConfig = new ReactorConfig(64, 128, 16, 4, 100, 2000, 600, 25_000, false, 2400);
-        var layoutHot = grid(2, 1, 100);
-        layoutHot.set(0, 0, DOUBLE); // +12 heat/tick vs 16 absorber -> let's use 1 rod + 1 reflector -> pulses=6 -> 3*6+4=22/tick?
-        // Actually 22 > 16 would melt down. Instead set absorberRate=12, DOUBLE (+12/tick) -> exact balance, heat>0 every tick!
+        // Height = 50 with absorberRate = 12 == DOUBLE (+12/tick): 1000 / 50 = 20 ticks/item -> 20/20 = 1.0 items/s!
         var balancedCfg = new ReactorConfig(64, 128, 12, 4, 100, 2000, 600, 25_000, false, 2400);
-        var exactLayout = grid(2, 1, 50); // 1000 / 50 = 20 ticks per item -> 20/20 = 1.0 items/s!
+        var exactLayout = grid(2, 1, 50);
         exactLayout.set(0, 0, DOUBLE);
         exactLayout.set(1, 0, ABSORBER);
         var exactSim = new ReactorSimulation(exactLayout, balancedCfg, fuel(10_000), ItemStack.EMPTY);
@@ -260,6 +258,35 @@ class ReactorSimulationDeepTest {
         for (int i = 0; i < 100 && halfSim.status() == ReactorSimulation.Status.RUNNING; i++) halfSim.tick();
         assertEquals(ReactorSimulation.Status.STEADY, halfSim.status());
         assertEquals(10.0, halfSim.steadyCoolantPerSecond(), 1e-6, "2 ticks per item at 20 TPS = 10.0 items/s");
+
+        // Two independent rod+absorber pairs (separated by an empty column) with height=500:
+        // Each consumes 1 item per 2 ticks -> delta coolantItems == 2 per 2-tick period -> 20.0 * 2 / 2 = 20.0 items/s.
+        // Using delta == 2 kills `20.0 * delta` -> `20.0 / delta` mutation!
+        var dualAbs = new ReactorLayout();
+        dualAbs.resize(3, 2, 64);
+        dualAbs.setHeight(500, 1000);
+        dualAbs.set(0, 0, DOUBLE);
+        dualAbs.set(0, 1, ABSORBER);
+        dualAbs.set(2, 0, DOUBLE);
+        dualAbs.set(2, 1, ABSORBER);
+        var dualSim = new ReactorSimulation(dualAbs, balancedCfg, fuel(10_000), ItemStack.EMPTY);
+        dualSim.start();
+        for (int i = 0; i < 100 && dualSim.status() == ReactorSimulation.Status.RUNNING; i++) dualSim.tick();
+        assertEquals(ReactorSimulation.Status.STEADY, dualSim.status());
+        assertEquals(20.0, dualSim.steadyCoolantPerSecond(), 1e-6);
+
+        // Non-divisible height = 400 (capacity 1000 -> 600 -> 200 < 400 -> stall resets to 0, next tick refills!).
+        // Order-independent: within 5 ticks it must hit the stall (maxHeatSeen >= 24) and refill (coolantItems == 2).
+        var stall400 = new ReactorLayout();
+        stall400.resize(2, 1, 64);
+        stall400.setHeight(400, 1000);
+        stall400.set(0, 0, DOUBLE);
+        stall400.set(1, 0, ABSORBER);
+        var stall400Sim = new ReactorSimulation(stall400, balancedCfg, fuel(10_000), ItemStack.EMPTY);
+        stall400Sim.start();
+        for (int i = 0; i < 5; i++) stall400Sim.tick();
+        assertTrue(stall400Sim.maxHeatSeen() >= 24, "stall tick must skip cooling so heat climbs to >= 24");
+        assertEquals(2, stall400Sim.coolantItems(), "stall must reset remaining coolant to 0 so refill happens");
 
         // Non-divisible height (height = 3) with exact-match absorberRate=12:
         // Every 334th tick hits the coolant modulo stall (1000 % 3 == 1), adding +12 unrecovered heat;
@@ -297,6 +324,17 @@ class ReactorSimulationDeepTest {
         assertEquals(ReactorSimulation.Status.STEADY, sim.status(), "period-2 oscillation must stabilize rapidly");
         assertTrue(sim.ticks() < 20, "expected fast cycle detection, took " + sim.ticks() + " ticks");
         assertEquals(0.0, sim.steadyCoolantPerSecond());
+        sim.start(); // start() must not resurrect a STEADY simulation
+        assertEquals(ReactorSimulation.Status.STEADY, sim.status());
+
+        // Same period-2 oscillation but with maxHeat = 6 (< oscillation peak 8):
+        // Unstable ticks keep resetting so it never melts down, yet checkpointPeak > maxHeat MUST block STEADY!
+        var lowMaxCfg = new ReactorConfig(64, 128, 16, 8, 10_000, 6, 600, 25_000, false, 2400);
+        var overHeatOsc = new ReactorSimulation(layout, lowMaxCfg, fuel(10_000), ItemStack.EMPTY);
+        overHeatOsc.start();
+        for (int i = 0; i < 60 && overHeatOsc.status() == ReactorSimulation.Status.RUNNING; i++) overHeatOsc.tick();
+        assertEquals(ReactorSimulation.Status.RUNNING, overHeatOsc.status(),
+                "periodic oscillation exceeding maxHeat must never be marked STEADY");
     }
 
     @Test
@@ -308,7 +346,13 @@ class ReactorSimulationDeepTest {
         sim.start();
 
         assertEquals(0, sim.heatHistory().length);
-        for (int i = 0; i < 120; i++) sim.tick();
+        // Short history (< 96) verifies exact ordering before ring wraparound.
+        for (int i = 0; i < 5; i++) sim.tick();
+        int[] shortHist = sim.heatHistory();
+        assertEquals(5, shortHist.length);
+        for (int i = 0; i < 5; i++) assertEquals((i + 1) * 4, shortHist[i]);
+
+        for (int i = 5; i < 120; i++) sim.tick();
         int[] history = sim.heatHistory();
         assertEquals(96, history.length);
         // Tick 25..120 -> heat = 25*4 .. 120*4
@@ -327,6 +371,7 @@ class ReactorSimulationDeepTest {
     @Test
     void coolantAlignedHeightFindsDivisorsAndGuardsZero() {
         assertEquals(1, ReactorSimulation.coolantAlignedHeight(1, 10));
+        assertEquals(4, ReactorSimulation.coolantAlignedHeight(3, 4));
         assertEquals(4, ReactorSimulation.coolantAlignedHeight(3, 10));
         assertEquals(8, ReactorSimulation.coolantAlignedHeight(6, 10));
         assertEquals(3, ReactorSimulation.coolantAlignedHeight(3, 3));
@@ -381,8 +426,13 @@ class ReactorSimulationDeepTest {
         assertTrue((rod1 == 47 && pipe1 == 29) || (rod1 == 76 && pipe1 == 0),
                 "unexpected tick-1 heat split rod=" + rod1 + " pipe=" + pipe1);
         sim.tick();
-        assertEquals(152, sim.cell(0, 0).heat + sim.cell(1, 0).heat, "total heat conserved after tick 2");
-        assertTrue(sim.cell(1, 0).heat >= 29, "pipe must have pulled >= 29 heat by tick 2");
+        int rod2 = sim.cell(0, 0).heat;
+        int pipe2 = sim.cell(1, 0).heat;
+        assertEquals(152, rod2 + pipe2, "total heat conserved after tick 2");
+        // Exact tick-2 split for diff/4+10 (kills diff*4 and n.heat+heat mutations):
+        // ROD-first order: (47+76)-33=90, 29+33=62. PIPE-first order: (76-29)+76=123, 0+29=29.
+        assertTrue((rod2 == 90 && pipe2 == 62) || (rod2 == 123 && pipe2 == 29),
+                "unexpected tick-2 heat split rod=" + rod2 + " pipe=" + pipe2);
 
         // Small diff (SINGLE +4/tick): min(4/4 + 10, 4) = 4 (clamped to diff).
         var small = grid(2, 1, 1);
@@ -392,8 +442,25 @@ class ReactorSimulationDeepTest {
         smallSim.start();
         smallSim.tick();
         smallSim.tick();
-        assertEquals(8, smallSim.cell(0, 0).heat + smallSim.cell(1, 0).heat);
-        assertTrue(smallSim.cell(1, 0).heat > 0, "pipe pulls heat even when diff <= 10");
+        // 3-cell chain QUAD - PIPE1 - PIPE2 verifies pipe pulls ONLY from hotter neighbors (never colder)
+        // and conserves total heat without producing negative heat.
+        var chain = grid(3, 1, 1);
+        chain.set(0, 0, QUAD);
+        chain.set(1, 0, PIPE);
+        chain.set(2, 0, PIPE);
+        var chainSim = new ReactorSimulation(chain, cfg, fuel(10_000), ItemStack.EMPTY);
+        chainSim.start();
+        for (int t = 1; t <= 4; t++) {
+            chainSim.tick();
+            int h0 = chainSim.cell(0, 0).heat;
+            int h1 = chainSim.cell(1, 0).heat;
+            int h2 = chainSim.cell(2, 0).heat;
+            assertEquals(76 * t, h0 + h1 + h2, "heat conserved on tick " + t);
+            assertTrue(h0 >= 0 && h1 >= 0 && h2 >= 0, "pipe must never create negative heat");
+        }
+        assertTrue(chainSim.cell(0, 0).heat > chainSim.cell(1, 0).heat + chainSim.cell(2, 0).heat,
+                "QUAD must stay hottest while pipes conduct a bounded fraction");
+        assertTrue(chainSim.cell(1, 0).heat > 0 && chainSim.cell(2, 0).heat > 0);
     }
 
     @Test
@@ -430,15 +497,31 @@ class ReactorSimulationDeepTest {
 
     @Test
     void idleAbsorberDoesNotConsumeCoolantAndExactMaxHeatBoundaryIsStable() {
-        // Absorber with NO hot neighbors (next to only EMPTY/VENT): refills once to 1000, removed==0 -> never consumes coolant!
-        var idleLayout = grid(2, 1, 10);
-        idleLayout.set(0, 0, ABSORBER);
-        idleLayout.set(1, 0, VENT);
-        var idleSim = new ReactorSimulation(idleLayout, ReactorConfig.DEFAULT, fuel(100), ItemStack.EMPTY);
+        // Active rod separated from an idle absorber+pipe+vent group so simulation ticks > 1 with activeRods > 0:
+        // Idle absorber next to 0-heat pipe must NOT pull heat negative or drain coolant; idle vent must NOT pull negative!
+        var idleLayout = new ReactorLayout();
+        idleLayout.resize(4, 1, 64);
+        idleLayout.setHeight(500, 1000);
+        idleLayout.set(0, 0, SINGLE);   // heats +4/tick (activeRods=1)
+        // gap at (1,0) EMPTY
+        idleLayout.set(2, 0, PIPE);     // stays at heat 0
+        idleLayout.set(3, 0, ABSORBER); // adjacent only to 0-heat PIPE
+        var idleCfg = new ReactorConfig(64, 128, 16, 4, 100, 10_000, 600, 25_000, false, 2400);
+        var idleSim = new ReactorSimulation(idleLayout, idleCfg, fuel(10_000), ItemStack.EMPTY);
         idleSim.start();
-        idleSim.tick();
-        assertEquals(ReactorSimulation.Status.STEADY, idleSim.status());
-        assertEquals(1, idleSim.coolantItems());
+        for (int i = 0; i < 10; i++) idleSim.tick();
+        assertEquals(0, idleSim.cell(2, 0).heat, "absorber must not cool 0-heat neighbor below 0");
+        assertEquals(1, idleSim.coolantItems(), "idle absorber with removed==0 must never drain coolant");
+
+        // Isolated vent next to 0-heat pipe also keeps pipe at 0.
+        var idleVent = grid(4, 1, 1);
+        idleVent.set(0, 0, SINGLE);
+        idleVent.set(2, 0, PIPE);
+        idleVent.set(3, 0, VENT);
+        var idleVentSim = new ReactorSimulation(idleVent, idleCfg, fuel(10_000), ItemStack.EMPTY);
+        idleVentSim.start();
+        for (int i = 0; i < 5; i++) idleVentSim.tick();
+        assertEquals(0, idleVentSim.cell(2, 0).heat);
 
         // Exact maxHeat boundary: SINGLE (+4/tick) + VENT (base=4, rel=100) stabilizes at heat=4.
         // With maxHeat = 4 (exact equality hottest == maxHeat): unstableTicks MUST stay 0 and status STEADY!
@@ -452,6 +535,14 @@ class ReactorSimulationDeepTest {
         assertEquals(ReactorSimulation.Status.STEADY, eqSim.status(), "hottest == maxHeat must remain stable");
         assertEquals(0, eqSim.unstableTicks());
         assertEquals(4, eqSim.maxHeatSeen());
+
+        // With maxHeat = 3 (< hottest 4) and maxUnstableTicks = 0: immediate meltdown on tick 1!
+        var overCfg = new ReactorConfig(64, 128, 16, 4, 100, 3, 0, 25_000, false, 2400);
+        var overSim = new ReactorSimulation(eqLayout, overCfg, fuel(10_000), ItemStack.EMPTY);
+        overSim.start();
+        overSim.tick();
+        assertEquals(ReactorSimulation.Status.MELTDOWN, overSim.status());
+        assertEquals(1, overSim.unstableTicks());
 
         // Fuel and coolant getters return configured values.
         var f = fuel(777);
@@ -475,6 +566,8 @@ class ReactorSimulationDeepTest {
 
     @Test
     void reactorInputsParseRejectsMalformedIdsWithoutThrowing() {
+        assertNotNull(ReactorInputs.parse("a:b"));
+        assertEquals("a:b", ReactorInputs.parse("a:b").toString());
         assertNotNull(ReactorInputs.parse("minecraft:coal"));
         assertEquals("oritech:uranium_pellet", ReactorInputs.parse("oritech:uranium_pellet").toString());
 

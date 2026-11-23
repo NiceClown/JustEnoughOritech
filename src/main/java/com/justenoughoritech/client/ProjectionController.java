@@ -97,6 +97,7 @@ public final class ProjectionController {
 
     static void previewPrinter(PrinterEntity source) {
         begin();
+        if (!active) return;
         printer=source;
         locked=true;
     }

@@ -132,25 +132,26 @@ class PrinterPacketsAndInspectionTest {
     @Test
     void buildInspectionScansAirMatchingObstructionUnloadedAndPlacedDecrement() {
         var origin = new BlockPos(10, 64, 20);
+        // Non-zero x, y, z offsets verify origin.get{X,Y,Z}() + placement.{x,y,z}() on all 3 axes.
         var placements = List.of(
-                new ReactorLayout.Placement(0, 0, 0, ReactorLayout.WALL),        // slot 0: already placed -> skip
-                new ReactorLayout.Placement(1, 0, 0, ReactorLayout.WALL),        // slot 1: air -> count WALL +1
-                new ReactorLayout.Placement(2, 0, 0, ReactorLayout.ENERGY_PORT), // slot 2: obstructed -> first obstruction + count ENERGY_PORT +1
-                new ReactorLayout.Placement(3, 0, 0, ReactorLayout.WALL),        // slot 3: unloaded -> unloaded=true + count WALL +1
-                new ReactorLayout.Placement(4, 0, 0, ReactorLayout.CONTROLLER)   // slot 4: obstructed -> keeps first obstruction (slot 2) + count CONTROLLER +1
+                new ReactorLayout.Placement(1, 2, 3, ReactorLayout.WALL),        // slot 0: air -> counted WALL +1 (tests placed(0)!)
+                new ReactorLayout.Placement(2, 1, 1, ReactorLayout.WALL),        // slot 1: already placed -> skip
+                new ReactorLayout.Placement(3, 4, 5, ReactorLayout.ENERGY_PORT), // slot 2: obstructed -> first obstruction + count ENERGY_PORT +1
+                new ReactorLayout.Placement(4, 2, 1, ReactorLayout.WALL),        // slot 3: unloaded -> unloaded=true + count WALL +1
+                new ReactorLayout.Placement(5, 3, 2, ReactorLayout.CONTROLLER)   // slot 4: obstructed -> keeps first obstruction (slot 2) + count CONTROLLER +1
         );
         var loaded = Map.of(
-                origin.offset(0, 0, 0), true,
-                origin.offset(1, 0, 0), true,
-                origin.offset(2, 0, 0), true,
-                origin.offset(3, 0, 0), false,
-                origin.offset(4, 0, 0), true
+                origin.offset(1, 2, 3), true,
+                origin.offset(2, 1, 1), true,
+                origin.offset(3, 4, 5), true,
+                origin.offset(4, 2, 1), false,
+                origin.offset(5, 3, 2), true
         );
         var existing = Map.of(
-                origin.offset(0, 0, 0), ReactorLayout.WALL,
-                origin.offset(1, 0, 0), "minecraft:air",
-                origin.offset(2, 0, 0), "minecraft:dirt",
-                origin.offset(4, 0, 0), "minecraft:oak_log"
+                origin.offset(1, 2, 3), "minecraft:air",
+                origin.offset(2, 1, 1), ReactorLayout.WALL,
+                origin.offset(3, 4, 5), "minecraft:dirt",
+                origin.offset(5, 3, 2), "minecraft:oak_log"
         );
         java.util.function.BiFunction<BlockPos, String, BuildInspection.CellStatus> probe = (pos, blockId) -> {
             if (!loaded.getOrDefault(pos, false)) return BuildInspection.CellStatus.UNLOADED;
@@ -159,7 +160,7 @@ class PrinterPacketsAndInspectionTest {
             return "minecraft:air".equals(present) ? BuildInspection.CellStatus.AIR : BuildInspection.CellStatus.OBSTRUCTED;
         };
 
-        // Paginated scan: first budget=2 covers slot 0 (already placed) and slot 1 (air).
+        // Paginated scan: first budget=2 covers slot 0 (air) and slot 1 (already placed).
         var full = new BuildInspection(placements, origin, 0);
         assertFalse(full.scan(probe, 2, false));
         assertEquals(Map.of(ReactorLayout.WALL, 1), full.requiredIds());
@@ -168,17 +169,19 @@ class PrinterPacketsAndInspectionTest {
 
         // Second step finishes slots 2..4 (also tests Integer.MAX_VALUE budget without int overflow!).
         assertTrue(full.scan(probe, Integer.MAX_VALUE, false));
-        assertEquals(origin.offset(2, 0, 0), full.obstruction(), "must retain FIRST obstruction only");
+        assertEquals(origin.offset(3, 4, 5), full.obstruction(), "must retain FIRST obstruction only");
         assertTrue(full.unloaded(), "must record unloaded chunk");
         assertEquals(Map.of(ReactorLayout.WALL, 2, ReactorLayout.ENERGY_PORT, 1, ReactorLayout.CONTROLLER, 1),
                 full.requiredIds());
 
-        // placed() decrements counted slots, removes entries at 0, ignores uncounted slots, and is idempotent.
-        full.placed(0); // already placed -> not counted
+        // placed() handles slot 0 (kills slot < 0 -> <= 0), uncounted slot 1, exact boundary slot==size, and idempotency.
+        full.placed(-1);
+        full.placed(placements.size());
+        full.placed(1); // already placed -> not counted
         assertEquals(2, full.requiredIds().get(ReactorLayout.WALL));
-        full.placed(1);
+        full.placed(0); // slot 0 IS counted -> decrements WALL 2 -> 1
         assertEquals(1, full.requiredIds().get(ReactorLayout.WALL));
-        full.placed(1); // repeated call is a no-op
+        full.placed(0); // repeated call is a no-op
         assertEquals(1, full.requiredIds().get(ReactorLayout.WALL));
         full.placed(3);
         assertFalse(full.requiredIds().containsKey(ReactorLayout.WALL), "reaching 0 must remove key");
@@ -189,7 +192,7 @@ class PrinterPacketsAndInspectionTest {
         // stopAtObstruction = true returns immediately at slot 2 without populating requiredIds or scanning slot 3.
         var fast = new BuildInspection(placements, origin, 0);
         assertTrue(fast.scan(probe, 10, true));
-        assertEquals(origin.offset(2, 0, 0), fast.obstruction());
+        assertEquals(origin.offset(3, 4, 5), fast.obstruction());
         assertFalse(fast.unloaded(), "must stop at slot 2 before reaching unloaded slot 3");
         assertTrue(fast.requiredIds().isEmpty());
 
@@ -197,7 +200,7 @@ class PrinterPacketsAndInspectionTest {
         var mid = new BuildInspection(placements, origin, 3);
         assertTrue(mid.scan(probe, 10, false));
         assertTrue(mid.unloaded());
-        assertEquals(origin.offset(4, 0, 0), mid.obstruction());
+        assertEquals(origin.offset(5, 3, 2), mid.obstruction());
         assertEquals(Map.of(ReactorLayout.WALL, 1, ReactorLayout.CONTROLLER, 1), mid.requiredIds());
     }
 }
