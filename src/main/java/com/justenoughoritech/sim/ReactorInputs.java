@@ -23,8 +23,9 @@ public record ReactorInputs(List<Fuel> fuels, List<ItemStack> coolants, String e
         if(snapshot==null)return failed("Waiting for server reactor data");
         var fuels=new ArrayList<Fuel>();
         for(var option:snapshot.fuels()){
+            if(option.duration()<=0)continue;
             var id=parse(option.itemId());
-            if(id==null||!BuiltInRegistries.ITEM.containsKey(id)||option.duration()<=0)continue;
+            if(id==null||!BuiltInRegistries.ITEM.containsKey(id))continue;
             var stack=new ItemStack(BuiltInRegistries.ITEM.getValue(id));
             if(!stack.isEmpty())fuels.add(new Fuel(stack,option.duration()));
         }
@@ -40,10 +41,11 @@ public record ReactorInputs(List<Fuel> fuels, List<ItemStack> coolants, String e
         return new ReactorInputs(fuels,coolants,null);
     }
 
-    private static Identifier parse(String value){
+    static Identifier parse(String value){
+        if(value==null)return null;
         int separator=value.indexOf(':');
         if(separator<1||separator==value.length()-1)return null;
-        return Identifier.fromNamespaceAndPath(value.substring(0,separator),value.substring(separator+1));
+        return Identifier.tryBuild(value.substring(0,separator),value.substring(separator+1));
     }
     private static ReactorInputs failed(String message){return new ReactorInputs(List.of(),List.of(),message);}
 }

@@ -48,7 +48,8 @@ public final class ReactorParts {
         return block == null ? Part.EMPTY : new Part(id.toString(), humanize(path), block, Kind.EMPTY, 0, 0);
     }
 
-    private static Kind kind(String name) {
+    static Kind kind(String name) {
+        if (name == null) return Kind.EMPTY;
         if (name.endsWith("ReactorRodBlock")) return Kind.ROD;
         if (name.endsWith("ReactorHeatPipeBlock")) return Kind.PIPE;
         if (name.endsWith("ReactorAbsorberBlock")) return Kind.ABSORBER;
@@ -57,7 +58,7 @@ public final class ReactorParts {
         return Kind.EMPTY;
     }
 
-    private static String hierarchyName(Class<?> type) {
+    static String hierarchyName(Class<?> type) {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) {
             String name = c.getName();
             if (name.startsWith("rearth.oritech.block.blocks.reactor.")) return c.getSimpleName();
@@ -65,16 +66,19 @@ public final class ReactorParts {
         return "";
     }
 
-    private static int readInt(Object instance, String method, int fallback) {
+    static int readInt(Object instance, String method, int fallback) {
         try {
             Method m = instance.getClass().getMethod(method);
-            return ((Number) m.invoke(instance)).intValue();
+            Object result = m.invoke(instance);
+            return result instanceof Number n ? n.intValue() : fallback;
         } catch (ReflectiveOperationException ignored) { return fallback; }
     }
 
-    private static String humanize(String path) {
+    static String humanize(String path) {
+        if (path == null || path.isEmpty()) return "";
         var words = new StringBuilder();
         for (String part : path.split("_")) {
+            if (part.isEmpty()) continue;
             if (!words.isEmpty()) words.append(' ');
             words.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
         }

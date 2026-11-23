@@ -79,17 +79,17 @@ public final class ReactorDesigner {
     }
     public record Result(Design safe,Design dangerous) {}
 
-    private record Cell(int x,int z) {}
-    private record Footprint(int width,int length) {}
-    private record RodBounds(int minX,int maxX,int minZ,int maxZ) {}
+    record Cell(int x,int z) {}
+    record Footprint(int width,int length) {}
+    record RodBounds(int minX,int maxX,int minZ,int maxZ) {}
     private record RodHeatGroup(List<Cell> cells,double average,int maximum) {}
     /**
      * Canonical 2D layout key. Transposed layouts normalise to the same key. This intentionally
      * accepts that the simulation's HashMap iteration order can differ by a few edge ticks after
      * a 90-degree rotation; the speed gain for the heuristic search is worth it.
      */
-    private record LayoutKey(int width,int length,int height,List<String> cells) {
-        private static LayoutKey of(ReactorLayout layout) {
+    record LayoutKey(int width,int length,int height,List<String> cells) {
+        static LayoutKey of(ReactorLayout layout) {
             int width=layout.width(), length=layout.length();
             var cells=new ArrayList<String>(width*length);
             if (width<=length) {
@@ -122,7 +122,8 @@ public final class ReactorDesigner {
                               ReactorInputs.Fuel fuel,ItemStack coolant,Request request,
                               BooleanSupplier cancelled) {
         BooleanSupplier stop=cancelled==null ? () -> false : cancelled;
-        if (size.width()>settings.maxSize() || size.length()>settings.maxSize()
+        if (size==null || settings==null || parts==null || fuel==null || request==null
+                || settings.maxHeat()<=0 || size.width()>settings.maxSize() || size.length()>settings.maxSize()
                 || size.height()>settings.maxSize() || request.target()<0 || stop.getAsBoolean())
             return new Result(null,null);
 
@@ -317,7 +318,7 @@ public final class ReactorDesigner {
      * Greedy symmetric refinement. It explores mixed rod types and cooling-ring changes
      * that the regular grouped search cannot express.
      */
-    private static void refineBest(Design seed,List<ReactorParts.Part> rods,ReactorParts.Part vent,
+    static void refineBest(Design seed,List<ReactorParts.Part> rods,ReactorParts.Part vent,
                                    ReactorParts.Part absorber,ReactorParts.Part pipe,
                                    ReactorParts.Part reflector,Search search) {
         if (seed==null || search.exhausted()) return;
@@ -388,13 +389,13 @@ public final class ReactorDesigner {
         }
     }
 
-    private static boolean replacePipeRing(ReactorLayout layout,ReactorParts.Part pipe,ReactorParts.Part coolant) {
+    static boolean replacePipeRing(ReactorLayout layout,ReactorParts.Part pipe,ReactorParts.Part coolant) {
         boolean changed=replaceNearestRing(layout,pipe);
         changed|=replaceSecondRing(layout,coolant);
         return changed;
     }
 
-    private static boolean coolingAllowed(CoolingMode mode,ReactorParts.Kind kind) {
+    static boolean coolingAllowed(CoolingMode mode,ReactorParts.Kind kind) {
         return !(mode==CoolingMode.PASSIVE && kind==ReactorParts.Kind.ABSORBER)
                 && !(mode==CoolingMode.WITH_ICE && kind==ReactorParts.Kind.VENT);
     }
@@ -403,7 +404,7 @@ public final class ReactorDesigner {
         return search.best!=null ? search.best : fallback;
     }
 
-    private static boolean replaceRods(ReactorLayout layout,ReactorParts.Part type) {
+    static boolean replaceRods(ReactorLayout layout,ReactorParts.Part type) {
         boolean changed=false;
         for (int z=0;z<layout.length();z++) for (int x=0;x<layout.width();x++) {
             var part=layout.get(x,z);
@@ -415,7 +416,7 @@ public final class ReactorDesigner {
         return changed;
     }
 
-    private static boolean replaceRodRing(ReactorLayout layout,ReactorParts.Part type,boolean boundary) {
+    static boolean replaceRodRing(ReactorLayout layout,ReactorParts.Part type,boolean boundary) {
         var bounds=rodBounds(layout);
         if (bounds==null) return false;
         boolean changed=false;
@@ -431,7 +432,7 @@ public final class ReactorDesigner {
         return changed;
     }
 
-    private static boolean mixRods(ReactorLayout layout,ReactorParts.Part inner,ReactorParts.Part outer,
+    static boolean mixRods(ReactorLayout layout,ReactorParts.Part inner,ReactorParts.Part outer,
                                    boolean checkerboard) {
         var xs=new TreeSet<Integer>();
         var zs=new TreeSet<Integer>();
@@ -481,7 +482,7 @@ public final class ReactorDesigner {
         return minX==Integer.MAX_VALUE ? null : new RodBounds(minX,maxX,minZ,maxZ);
     }
 
-    private static boolean replaceNearestRing(ReactorLayout layout,ReactorParts.Part target) {
+    static boolean replaceNearestRing(ReactorLayout layout,ReactorParts.Part target) {
         boolean changed=false;
         for (int z=0;z<layout.length();z++) for (int x=0;x<layout.width();x++) {
             var part=layout.get(x,z);
@@ -495,7 +496,7 @@ public final class ReactorDesigner {
         return changed;
     }
 
-    private static boolean replaceSecondRing(ReactorLayout layout,ReactorParts.Part target) {
+    static boolean replaceSecondRing(ReactorLayout layout,ReactorParts.Part target) {
         boolean changed=false;
         for (int z=0;z<layout.length();z++) for (int x=0;x<layout.width();x++) {
             var part=layout.get(x,z);
@@ -510,7 +511,7 @@ public final class ReactorDesigner {
         return changed;
     }
 
-    private static boolean adjacentToKind(ReactorLayout layout,int x,int z,ReactorParts.Kind kind) {
+    static boolean adjacentToKind(ReactorLayout layout,int x,int z,ReactorParts.Kind kind) {
         for (var direction : DIRECTIONS) {
             int nx=x+direction[0], nz=z+direction[1];
             if (nx>=0 && nx<layout.width() && nz>=0 && nz<layout.length()
@@ -707,7 +708,8 @@ public final class ReactorDesigner {
                     allRods=false;
                     break;
                 }
-                int value=heat[cell.z()*width+cell.x()];
+                int index=cell.z()*width+cell.x();
+                int value=index>=0 && index<heat.length ? heat[index] : 0;
                 sum+=value;
                 maximum=Math.max(maximum,value);
                 count++;
@@ -717,7 +719,7 @@ public final class ReactorDesigner {
         return groups;
     }
 
-    private static List<Cell> mirrorCells(ReactorLayout layout,int x,int z) {
+    static List<Cell> mirrorCells(ReactorLayout layout,int x,int z) {
         int mx=layout.width()-1-x, mz=layout.length()-1-z;
         var cells=new LinkedHashSet<Cell>();
         cells.add(new Cell(x,z));
@@ -731,7 +733,7 @@ public final class ReactorDesigner {
         return cells.stream().map(cell -> cell.x()+":"+cell.z()).sorted().toList().toString();
     }
 
-    private static boolean fillGroup(ReactorLayout layout,List<Cell> cells,ReactorParts.Part target,
+    static boolean fillGroup(ReactorLayout layout,List<Cell> cells,ReactorParts.Part target,
                                      Predicate<ReactorParts.Part> allowed) {
         for (var cell : cells) {
             if (!allowed.test(layout.get(cell.x(),cell.z()))) return false;
@@ -747,7 +749,7 @@ public final class ReactorDesigner {
         return changed;
     }
 
-    private static List<Footprint> footprints(ReactorConfig config,ReactorParts.Part rod,long target,
+    static List<Footprint> footprints(ReactorConfig config,ReactorParts.Part rod,long target,
                                               ReactorLayout base) {
         int limit=growthLimit(config.maxSize());
         // A three-block pitch leaves room between rods for cooling. Use it only to order search.
@@ -770,31 +772,31 @@ public final class ReactorDesigner {
     }
 
     public static int growthLimit(int serverLimit) {
-        return Math.min(66,serverLimit);
+        return Math.min(64,serverLimit);
     }
 
-    private static boolean balanced(ReactorLayout layout) {
+    static boolean balanced(ReactorLayout layout) {
         int min=Math.min(layout.height(),Math.min(layout.width(),layout.length()));
         int max=Math.max(layout.height(),Math.max(layout.width(),layout.length()));
         return max<=MAX_ASPECT_RATIO*min;
     }
 
-    private static double shapeCost(ReactorLayout layout) {
+    static double shapeCost(ReactorLayout layout) {
         return shapeCost(layout.width(),layout.length(),layout.height());
     }
 
-    private static double shapeCost(int width,int length,int height) {
+    static double shapeCost(int width,int length,int height) {
         int max=Math.max(height,Math.max(width,length));
         int min=Math.min(height,Math.min(width,length));
         double ratio=(double)max/min;
         return (double)width*length*height*ratio*ratio;
     }
 
-    private static long rodPower(ReactorConfig config,ReactorParts.Part rod,int height) {
+    static long rodPower(ReactorConfig config,ReactorParts.Part rod,int height) {
         return Math.max(1,(long)config.rfPerPulse()*rod.pulses()*height);
     }
 
-    private static List<Integer> centeredAxis(int dimension,int spacing) {
+    static List<Integer> centeredAxis(int dimension,int spacing) {
         int margin=spacing>=3 && dimension>=3 ? 1 : 0;
         int available=dimension-2*margin;
         int count=1+(available-1)/spacing;
@@ -809,7 +811,7 @@ public final class ReactorDesigner {
         return positions;
     }
 
-    private static List<List<Cell>> rodGroups(ReactorLayout size,int pitchX,int pitchZ) {
+    static List<List<Cell>> rodGroups(ReactorLayout size,int pitchX,int pitchZ) {
         var xs=centeredAxis(size.width(),pitchX);
         var zs=centeredAxis(size.length(),pitchZ);
         var groups=new ArrayList<List<Cell>>();
@@ -834,7 +836,7 @@ public final class ReactorDesigner {
         return groups;
     }
 
-    private static Set<Integer> counts(List<List<Cell>> groups,long target,long perRod) {
+    static Set<Integer> counts(List<List<Cell>> groups,long target,long perRod) {
         int max=groups.size();
         int maximumRods=groups.stream().mapToInt(List::size).sum();
         double average=(double)maximumRods/max;
@@ -859,7 +861,7 @@ public final class ReactorDesigner {
         return groups.get(count==1 ? 0 : index*(groups.size()-1)/(count-1));
     }
 
-    private static ReactorLayout candidate(ReactorLayout size,List<List<Cell>> groups,int count,ReactorParts.Part rod) {
+    static ReactorLayout candidate(ReactorLayout size,List<List<Cell>> groups,int count,ReactorParts.Part rod) {
         var layout=size.copy();
         layout.clear();
         // Select complete mirror groups and sample from center to edge when using multiple groups.
@@ -869,7 +871,7 @@ public final class ReactorDesigner {
         return layout;
     }
 
-    private static void fillNeighbors(ReactorLayout layout,ReactorParts.Kind source,ReactorParts.Part fill,
+    static void fillNeighbors(ReactorLayout layout,ReactorParts.Kind source,ReactorParts.Part fill,
                                       int horizontal,int vertical) {
         for (int z=0;z<layout.length();z++) for (int x=0;x<layout.width();x++) {
             if (layout.get(x,z).kind()!=source) continue;
@@ -881,7 +883,7 @@ public final class ReactorDesigner {
         }
     }
 
-    private static void placeOuterReflectors(ReactorLayout layout,ReactorParts.Part reflector,boolean alongX) {
+    static void placeOuterReflectors(ReactorLayout layout,ReactorParts.Part reflector,boolean alongX) {
         if (alongX) {
             for (int z=0;z<layout.length();z++) for (int x=1;x<layout.width()-1;x++) {
                 if (layout.get(x,z).kind()!=ReactorParts.Kind.ROD) continue;
@@ -901,7 +903,7 @@ public final class ReactorDesigner {
         }
     }
 
-    private static void placeOuterCooling(ReactorLayout layout,ReactorParts.Part absorber,boolean alongX) {
+    static void placeOuterCooling(ReactorLayout layout,ReactorParts.Part absorber,boolean alongX) {
         if (alongX) {
             for (int x=1;x<layout.width()-1;x++) for (int z=0;z<layout.length();z++) {
                 if (layout.get(x,z).kind()!=ReactorParts.Kind.ROD) continue;
@@ -928,7 +930,7 @@ public final class ReactorDesigner {
         fillNeighbors(layout,ReactorParts.Kind.ROD,nearPipes,1,1);
     }
 
-    private static void placeSides(ReactorLayout layout,int x,int z,ReactorParts.Part part,boolean alongX) {
+    static void placeSides(ReactorLayout layout,int x,int z,ReactorParts.Part part,boolean alongX) {
         if (alongX) {
             if (x>0 && layout.get(x-1,z).kind()==ReactorParts.Kind.EMPTY) layout.set(x-1,z,part);
             if (x+1<layout.width() && layout.get(x+1,z).kind()==ReactorParts.Kind.EMPTY) layout.set(x+1,z,part);
@@ -938,7 +940,7 @@ public final class ReactorDesigner {
         }
     }
 
-    private static boolean better(Design candidate,Design previous,long target) {
+    static boolean better(Design candidate,Design previous,long target) {
         if (previous==null) return true;
         long a=candidate.exportRate(), b=previous.exportRate();
         if (a!=b && (target==0 || a<target || b<target)) return a>b;
@@ -961,13 +963,13 @@ public final class ReactorDesigner {
     }
 
     /** Small diversified shortlist of good stable candidates, used as refinement seeds. */
-    private static final class Shortlist {
+    static final class Shortlist {
         private final long target;
         private final Map<String,Design> designs=new LinkedHashMap<>();
 
-        private Shortlist(long target) { this.target=target; }
+        Shortlist(long target) { this.target=target; }
 
-        private void offer(Design design) {
+        void offer(Design design) {
             if (design==null || design.dangerous()) return;
             var key=key(design.layout());
             var previous=designs.get(key);
@@ -980,13 +982,13 @@ public final class ReactorDesigner {
             }
         }
 
-        private List<Design> top(int count) {
+        List<Design> top(int count) {
             var sorted=new ArrayList<>(designs.values());
             sorted.sort((a,b) -> better(a,b,target) ? -1 : better(b,a,target) ? 1 : 0);
             return List.copyOf(sorted.subList(0,Math.min(count,sorted.size())));
         }
 
-        private static String key(ReactorLayout layout) {
+        static String key(ReactorLayout layout) {
             int rodCells=0, absorbers=0, vents=0, pipes=0, reflectors=0;
             var rodIds=new TreeSet<String>();
             for (int z=0;z<layout.length();z++) for (int x=0;x<layout.width();x++) {
@@ -1049,7 +1051,7 @@ public final class ReactorDesigner {
      * O(1) upper-bound check before running a simulation: a rod without any cooling neighbour,
      * or total heat generation above the maximum cooling capacity, cannot reach a stable state.
      */
-    private static boolean thermallyImpossible(ReactorSimulation simulation,ReactorLayout layout,
+    static boolean thermallyImpossible(ReactorSimulation simulation,ReactorLayout layout,
                                                ReactorConfig settings,Request request) {
         if (request.risk().includesDangerous) return false;
         int maxHeat=(int)((long)settings.maxHeat()*request.risk().maximumHeatPercent/100);

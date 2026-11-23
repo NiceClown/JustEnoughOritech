@@ -44,7 +44,7 @@ public final class SimulatorWidget implements IRecipeWidget {
     private record Viewport(Screen screen, SimulatorWidget widget, ScreenRectangle clip,
                             float left, float top, float scaleX, float scaleY) {
         boolean contains(Screen screen, double x, double y) {
-            return this.screen == screen && clip != null
+            return this.screen == screen && clip != null && scaleX > 0 && scaleY > 0
                     && clip.containsPoint((int)Math.floor(x), (int)Math.floor(y));
         }
 
@@ -462,8 +462,9 @@ public final class SimulatorWidget implements IRecipeWidget {
         }
         if (list(x,y) && x<406) {
             var entries = blockList();
-            int row = WB.blockOffset+((int)y-LIST_TOP)/11;
-            if (row<entries.size())
+            int localRow = ((int)y-LIST_TOP)/11;
+            int row = WB.blockOffset+localRow;
+            if (localRow>=0 && localRow<LIST_ROWS && row<entries.size())
                 tooltip.add(BuiltInRegistries.BLOCK.getValue(Identifier.parse(entries.get(row).getKey())).getName());
         }
     }
