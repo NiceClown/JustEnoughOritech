@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.6 — Oritech maxSize, FTB recipe and hardening fix release
+
+Just Enough Oritech by **NiceClown**.
+
+This release fixes the Oritech `maxSize` outer-vs-interior off-by-2 bug, makes the Reactor Printer craftable in FTB Evolution 2 via `#c:ingots/steel`, adds the missing Layout button tooltip translation, and hardens simulation, printer, network and client edge cases. 0.5.6 supersedes 0.5.5.
+
+### Oritech compatibility and recipes
+
+- **Fixed `maxSize` off-by-2 limit (`ServerConfigReader`, `ReactorConfig`, `ReactorDesigner`, `PrinterLayout`)**: Oritech's `NuclearReactorControllerBlockEntity.expandWall` treats `OritechConfig.maxSize` as the **outer** multiblock span (`maxInterior = maxSize - 2`). The server config reader now converts `maxSize` to the true interior limit (**64** in default/ATM11 instead of 66; **14** in FTB Evolution 2 instead of 16), preventing `reactor_edge_invalid` failures on max-size builds.
+- **Fixed Reactor Printer recipe in FTB Evolution 2**: replaced hardcoded `oritech:steel_ingot` with `#c:ingots/steel` in `reactor_printer.json` so unified steel ingots (such as `ftbmaterials:steel_ingot`) work seamlessly.
+- **Hardened server config & compatibility checks**: deterministic sorted fuel discovery, `Items.AIR` filtering, non-public/anonymous `Recipe<?>` support for KubeJS/modded recipes, strict `int` range checks, `PhysicsCompatibility` classloader fallback + `LinkageError` handling, and symmetric `4096` collection bounds in `ReactorConfigPayload`.
+
+### Client, printer and simulation fixes
+
+- Added the missing `gui.just_enough_oritech.control.layout_tools` translation key in `en_us.json` and `ru_ru.json`, and updated `physics_changed` messaging for verified `exp12`/`exp14` builds.
+- `ProjectionController`: drain stale queued key clicks on `begin()`, guard `previewPrinter()` when no level is loaded, and null-guard world access.
+- `AutoDesignScreen`, `SimulatorWidget`, `LayoutToolsScreen`, `TextViewport`: guarded NPE on null results, cancelled in-flight searches in `removed()`, fixed off-by-one block list hover tooltip, null-checked clipboard access, and routed `LayoutToolsScreen` labels through `TextViewport` to prevent overflow in Russian/narrow scales.
+- `ReactorSimulation`, `ReactorInputs`, `ReactorParts`, `ReactorLayout`, `ReactorDesigner`, `PrinterEntity`, `PrinterLayout`, `BuildInspection`, `JEIPlugin`: guarded `ventRelativeRate <= 0` division, malformed snapshot IDs, `humanize()` empty segments, null owners/empty Transfer API resources, `BuildInspection` scan overflow, and null registry keys.
+
+### Tests and pack verification
+
+- Expanded automated suite from 27 to **148 passing JUnit 5 tests** across 17 suites (sim, multi-version Oritech `exp12`/`exp14`/legacy `1.2.x` compatibility, network codecs, printer layout/inspection, client lifecycle/widgets, and resource/lang/recipe validation).
+- Verified with PIT 1.30.2 (`STRONGER`, 15 mutators) mutation testing on Java 25 (`ReactorLayout` 96.3%, `ReactorSimulation` 94.6%, `PrinterLayout` 90.0%, `ReactorConfigPayload` 90.3%, `ClientRuntimeConfig` & `DesignGuard` 100%).
+- Verified live in isolated **ATM11** (302 mods, `oritech-2.0.0-exp12`) and **FTB Evolution 2** (439 mods, `oritech-2.0.0-exp14` + `oritechthings` + `applied_oritech`): 0 errors/warnings, live 20-tick RF/t and per-cell heat equivalence against Oritech's controller, live `14` vs `15` max-size boundary check, and live `#c:ingots/steel` crafting with `ftbmaterials:steel_ingot`.
+
+### Compatibility
+
+- Minecraft **26.1.2**, NeoForge **26.1.2.109+**, Java **25**.
+- Oritech **2.0.0-exp12** and **2.0.0-exp14**; JEI **29.53.0.115** verified.
+- Client and server both need the mod.
+
 ## 0.5.5 — keybind and in-pack UI fix release
 
 Just Enough Oritech by **NiceClown**.
