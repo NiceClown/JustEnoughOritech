@@ -17,6 +17,7 @@ import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
@@ -146,7 +147,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
 
     static void tick(Level level,BlockPos pos,BlockState block,PrinterEntity printer) {
         if (!(level instanceof ServerLevel server) || printer.layout==null) return;
-        var owner = server.getServer().getPlayerList().getPlayer(printer.owner);
+        var owner = printer.owner==null ? null : server.getServer().getPlayerList().getPlayer(printer.owner);
         if (owner!=null && (owner.level()!=server || !pos.closerToCenterThan(owner.position(),RANGE))) owner=null;
         printer.inspect(server,owner);
         if (printer.cursor>=printer.placements.size()) return;
@@ -164,7 +165,12 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
             printer.state=OBSTRUCTED;
             return;
         }
-        var build = BuiltInRegistries.BLOCK.getValue(Identifier.parse(plan.blockId()));
+        var blockId = Identifier.tryParse(plan.blockId());
+        if (blockId==null || !BuiltInRegistries.BLOCK.containsKey(blockId)) {
+            printer.state=OBSTRUCTED;
+            return;
+        }
+        var build = BuiltInRegistries.BLOCK.getValue(blockId);
         if (server.getBlockState(where).is(build)) {
             printer.advance();
             return;
@@ -183,6 +189,10 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
 
         // Adjacent storage feeds sustained jobs. The owner's main inventory is the fallback.
         Item required = build.asItem();
+        if (required==Items.AIR) {
+            printer.state=MATERIALS;
+            return;
+        }
         try (var transaction = Transaction.openRoot()) {
             boolean adjacent = printer.extractAdjacent(server,required,transaction);
             int slot = adjacent ? -1 : findInInventory(owner.getInventory(),required);
@@ -227,7 +237,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
             if (handler==null) continue;
             for (int i=0;i<handler.size();i++) {
                 ItemResource resource=handler.getResource(i);
-                if (resource.getItem()==item && handler.extract(i,resource,1,transaction)==1) return true;
+                if (!resource.isEmpty() && resource.getItem()==item && handler.extract(i,resource,1,transaction)==1) return true;
             }
         }
         return false;
@@ -270,6 +280,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
                 if (storage==null) continue;
                 for (int slot=0;slot<storage.size();slot++) {
                     var resource=storage.getResource(slot);
+                    if (resource.isEmpty()) continue;
                     int need=remaining.getOrDefault(resource.getItem(),0);
                     if (need>0) remaining.put(resource.getItem(),need-storage.extract(slot,resource,need,transaction));
                 }

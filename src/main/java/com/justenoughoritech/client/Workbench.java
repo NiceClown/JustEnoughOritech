@@ -33,13 +33,13 @@ public final class Workbench {
     public ReactorSimulation simulation;
     public String issue;
     public int speed = 1;
-    private boolean partsLoaded;
+    boolean partsLoaded;
     private int revision;
-    private boolean designing;
-    private CompletableFuture<ReactorDesigner.Result> autoDesignFuture;
-    private AtomicBoolean autoDesignCancelled;
-    private java.util.function.Consumer<ReactorDesigner.Result> autoDesignCallback;
-    private long autoDesignGeneration;
+    boolean designing;
+    CompletableFuture<ReactorDesigner.Result> autoDesignFuture;
+    AtomicBoolean autoDesignCancelled;
+    java.util.function.Consumer<ReactorDesigner.Result> autoDesignCallback;
+    long autoDesignGeneration;
     public ReactorDesigner.Request lastRequest;
     public net.minecraft.network.chat.Component designStatus;
     public int revision() { return revision; }

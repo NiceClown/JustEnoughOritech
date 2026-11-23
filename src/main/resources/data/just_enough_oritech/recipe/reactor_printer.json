@@ -7,7 +7,7 @@
     "SMS"
   ],
   "key": {
-    "S": "oritech:steel_ingot",
+    "S": "#c:ingots/steel",
     "M": "oritech:motor",
     "C": "oritech:machine_core_3",
     "U": "oritech:processing_unit",

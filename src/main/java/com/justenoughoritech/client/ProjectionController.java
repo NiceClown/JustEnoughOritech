@@ -75,6 +75,7 @@ public final class ProjectionController {
 
     public static void begin() {
         var client=Minecraft.getInstance();
+        if (client.level==null) return;
         world=client.level;
         active=true;
         locked=false;
@@ -83,7 +84,15 @@ public final class ProjectionController {
         printer=null;
         preview=null;
         manualInspection=null;
+        drainKey(lockKey);
+        drainKey(cancelKey);
+        drainKey(rotateKey);
         client.setScreen(null);
+    }
+
+    private static void drainKey(KeyMapping mapping) {
+        if (mapping==null) return;
+        while (mapping.consumeClick()) {}
     }
 
     static void previewPrinter(PrinterEntity source) {
@@ -220,7 +229,7 @@ public final class ProjectionController {
 
     static void sendToPrinter() {
         var mc=Minecraft.getInstance();
-        if (!active || !locked || lockedHit==null || printer!=null || mc.level!=world) {
+        if (!active || !locked || lockedHit==null || printer!=null || mc.level==null || mc.level!=world) {
             mc.gui.setOverlayMessage(tr("printer_lock"),false);
             return;
         }
@@ -238,7 +247,7 @@ public final class ProjectionController {
     }
 
     @SubscribeEvent public static void render(RenderLevelStageEvent.AfterLevel event) {
-        if (!active || Minecraft.getInstance().level!=world) return;
+        if (!active || world==null || Minecraft.getInstance().level!=world) return;
         var selected = printer!=null ? printer.layout() : Workbench.INSTANCE.layout;
         if (selected==null) return;
         var anchor=printer!=null ? printer.anchor() : manualOrigin(selected);

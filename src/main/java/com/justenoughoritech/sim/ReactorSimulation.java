@@ -120,7 +120,11 @@ public final class ReactorSimulation {
                 case VENT -> {
                     Cell target=null; int max=0;
                     for(Cell n:c.neighbors) if(n.heat>max){target=n;max=n.heat;}
-                    if(target!=null){int removed=Math.min(max/config.ventRelativeRate()+config.ventBaseRate(),max);target.heat-=removed;}
+                    if(target!=null){
+                        int rel=Math.max(1,config.ventRelativeRate());
+                        int removed=Math.clamp(max/rel+config.ventBaseRate(),0,max);
+                        target.heat-=removed;
+                    }
                 }
                 default -> { }
             }
@@ -192,6 +196,7 @@ public final class ReactorSimulation {
     public double steadyCoolantPerSecond(){return steadyCoolantPerSecond;}
     boolean usesCoolant(){return coolantCheckpoint!=null;}
     static int coolantAlignedHeight(int height,int maxHeight) {
+        if (height<=0) return height;
         for (int value=height;value<=maxHeight;value++) {
             if (COOLANT_ITEM_CAPACITY%value==0) return value;
         }

@@ -21,6 +21,7 @@ final class LayoutToolsScreen extends Screen {
     private static final int TEXT = 0xFFF1F3F5, MUTED = 0xFFBCC9D4, ERROR = 0xFFFF9A83;
 
     private final Screen parent;
+    private final TextViewport textViewport = new TextViewport();
     private int left, top, panelWidth, column;
     private EditBox coreWidth, coreLength, stackHeight, ports, xCopies, zCopies, rowCount;
     private Component status = Component.empty();
@@ -147,7 +148,7 @@ final class LayoutToolsScreen extends Screen {
 
     private void importLayout() {
         String text = minecraft.keyboardHandler.getClipboard();
-        if (!text.isBlank() && text.length() <= MAX_CLIPBOARD_LENGTH) {
+        if (text != null && !text.isBlank() && text.length() <= MAX_CLIPBOARD_LENGTH) {
             try {
                 var draft = PrinterLayout.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(text))
                         .result().map(blueprint -> blueprint.resolveDraft(limit())).orElse(null);
@@ -184,17 +185,22 @@ final class LayoutToolsScreen extends Screen {
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(left, top, left + panelWidth, top + HEIGHT, 0xFF242B32);
         graphics.outline(left, top, panelWidth, HEIGHT, 0xFF768494);
-        graphics.text(font, title, x(0), top + 7, TEXT, false);
-        graphics.text(font, tr("layout_current", WB.layout.width(), WB.layout.length(), WB.layout.height(), limit()),
-                x(0), top + 21, MUTED, false);
-        graphics.text(font, tr("layout_width"), x(0), top + 34, MUTED, false);
-        graphics.text(font, tr("layout_length"), x(1), top + 34, MUTED, false);
-        graphics.text(font, tr("layout_height"), x(2), top + 34, MUTED, false);
-        graphics.text(font, tr("layout_ports"), x(3), top + 34, MUTED, false);
-        graphics.text(font, tr("layout_x_copies"), x(0), top + 86, MUTED, false);
-        graphics.text(font, tr("layout_z_copies"), x(1), top + 86, MUTED, false);
-        graphics.text(font, tr("layout_count"), x(0), top + 125, MUTED, false);
-        graphics.text(font, status, x(0), top + 188, error ? ERROR : MUTED, false);
+        int inner = panelWidth - 2 * PAD;
+        line(graphics, title, x(0), top + 7, inner, TEXT);
+        line(graphics, tr("layout_current", WB.layout.width(), WB.layout.length(), WB.layout.height(), limit()),
+                x(0), top + 21, inner, MUTED);
+        line(graphics, tr("layout_width"), x(0), top + 34, column, MUTED);
+        line(graphics, tr("layout_length"), x(1), top + 34, column, MUTED);
+        line(graphics, tr("layout_height"), x(2), top + 34, column, MUTED);
+        line(graphics, tr("layout_ports"), x(3), top + 34, column, MUTED);
+        line(graphics, tr("layout_x_copies"), x(0), top + 86, column, MUTED);
+        line(graphics, tr("layout_z_copies"), x(1), top + 86, column, MUTED);
+        line(graphics, tr("layout_count"), x(0), top + 125, column * 3 + 2 * GAP, MUTED);
+        line(graphics, status, x(0), top + 188, inner, error ? ERROR : MUTED);
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+    }
+
+    private void line(GuiGraphicsExtractor graphics, Component label, int x, int y, int width, int color) {
+        textViewport.line(graphics, font, label, x, y, width, color, false);
     }
 }

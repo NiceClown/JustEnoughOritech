@@ -52,7 +52,8 @@ public final class JEIPlugin implements IModPlugin {
 
     @Override public void registerRecipeCatalysts(IRecipeCatalystRegistration registration) {
         Block controller = BuiltInRegistries.BLOCK.getValue(Identifier.fromNamespaceAndPath("oritech", "nuclear_reactor_controller"));
-        if (controller != null && BuiltInRegistries.BLOCK.getKey(controller).getNamespace().equals("oritech"))
+        if (controller != null && BuiltInRegistries.BLOCK.getKey(controller) != null
+                && BuiltInRegistries.BLOCK.getKey(controller).getNamespace().equals("oritech"))
             registration.addCraftingStation(TYPE, new ItemStack(controller));
     }
 

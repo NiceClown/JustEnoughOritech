@@ -23,10 +23,13 @@ public final class ReactorLayout {
     public int energyPorts() { return energyPorts; }
     public void setEnergyPorts(int count) { energyPorts = Math.clamp(count, 1, maxEnergyPorts(width,length,height)); }
     public static int maxEnergyPorts(int width,int length,int height) {
+        if (width<1 || length<1 || height<1) return 0;
         return (int)Math.min(Integer.MAX_VALUE,2L*(width+(long)length)*height-1);
     }
     public ReactorParts.Part get(int x, int z) { return cells[z * width + x]; }
-    public void set(int x, int z, ReactorParts.Part part) { cells[z * width + x] = part; }
+    public void set(int x, int z, ReactorParts.Part part) {
+        cells[z * width + x] = part == null ? ReactorParts.Part.EMPTY : part;
+    }
     public void setHeight(int height, int max) {
         this.height = Math.max(1, Math.min(max, height));
         setEnergyPorts(energyPorts);

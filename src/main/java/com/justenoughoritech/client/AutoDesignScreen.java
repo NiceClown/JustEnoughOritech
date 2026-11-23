@@ -53,7 +53,7 @@ final class AutoDesignScreen extends Screen {
         var last=WB.lastRequest;
         if (last==null) rods.forEach(rod -> allowed.add(rod.id()));
         else {
-            allowed.addAll(last.allowedRods());
+            rods.stream().map(ReactorParts.Part::id).filter(last.allowedRods()::contains).forEach(allowed::add);
             risk=last.risk();
             coolingMode=last.coolingMode();
             allowResize=last.allowResize();
@@ -113,7 +113,7 @@ final class AutoDesignScreen extends Screen {
             invalidateResult();
         }).bounds(left+120,top+108,panelWidth-128,18)
                 .tooltip(Tooltip.create(tr("auto_resize_tip",ReactorDesigner.growthLimit(ClientRuntimeConfig.config().maxSize())))).build());
-        applySafe=addRenderableWidget(Button.builder(tr("auto_apply_safe"),button -> apply(result.safe()))
+        applySafe=addRenderableWidget(Button.builder(tr("auto_apply_safe"),button -> apply(result==null ? null : result.safe()))
                 .bounds(left+8,top+216,panelWidth/2-13,20).build());
         applyDanger=addRenderableWidget(Button.builder(tr("auto_review_risky"),button -> confirmDanger())
                 .bounds(left+panelWidth/2+3,top+216,panelWidth/2-11,20).build());
@@ -204,6 +204,15 @@ final class AutoDesignScreen extends Screen {
     private static Component dangerSummary(ReactorDesigner.Design design) {
         String message=design.outcome()==ReactorSimulation.Status.SAFE_COOLDOWN ? "auto_risky_shutdown" : "auto_risky_meltdown";
         return tr(message,design.exportRate(),design.ticks());
+    }
+
+    @Override public void removed() {
+        if (busy) {
+            searchToken++;
+            busy=false;
+            WB.cancelAutoDesign();
+        }
+        super.removed();
     }
 
     @Override public void onClose() {
