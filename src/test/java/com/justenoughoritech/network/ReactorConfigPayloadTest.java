@@ -1,18 +1,30 @@
 package com.justenoughoritech.network;
 
+import com.justenoughoritech.client.ClientRuntimeConfig;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.EncoderException;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.neoforge.network.connection.ConnectionType;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReactorConfigPayloadTest {
+
+    @AfterEach
+    void resetClientState() {
+        ClientRuntimeConfig.reset();
+    }
 
     private static RegistryFriendlyByteBuf newBuf() {
         return new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY, ConnectionType.NEOFORGE);
@@ -211,6 +223,36 @@ class ReactorConfigPayloadTest {
         } finally {
             buf.release();
         }
+    }
+
+    @Test
+    void handleClientEnqueuesAndAcceptsSnapshotOnlyOnClientDist() {
+        var payload = new ReactorConfigPayload("2.0.0-exp14", true, 14, 38, 16, 4, 100, 4000, 400,
+                75_000, false, 2400,
+                List.of(new ReactorConfigPayload.FuelOption("oritech:uranium_pellet", 4000)),
+                List.of("minecraft:ice"), "");
+        AtomicInteger enqueued = new AtomicInteger();
+        IPayloadContext context = (IPayloadContext) Proxy.newProxyInstance(
+                IPayloadContext.class.getClassLoader(),
+                new Class<?>[]{IPayloadContext.class},
+                (proxy, method, args) -> {
+                    if ("enqueueWork".equals(method.getName()) && args != null && args.length == 1
+                            && args[0] instanceof Runnable runnable) {
+                        enqueued.incrementAndGet();
+                        runnable.run();
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    throw new UnsupportedOperationException("Unexpected call: " + method.getName());
+                }
+        );
+
+        ReactorConfigPayload.handleClient(payload, context, Dist.DEDICATED_SERVER);
+        assertEquals(0, enqueued.get());
+        assertNull(ClientRuntimeConfig.snapshot());
+
+        ReactorConfigPayload.handleClient(payload, context, Dist.CLIENT);
+        assertEquals(1, enqueued.get());
+        assertEquals(payload, ClientRuntimeConfig.snapshot());
     }
 
     private static void writeHeader(RegistryFriendlyByteBuf buf) {

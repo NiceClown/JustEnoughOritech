@@ -80,7 +80,11 @@ public record ReactorConfigPayload(String oritechVersion, boolean compatible,
     @Override public Type<? extends CustomPacketPayload> type() { return TYPE; }
 
     public static void handleClient(ReactorConfigPayload payload, IPayloadContext context) {
-        if (FMLEnvironment.getDist() == Dist.CLIENT)
+        handleClient(payload, context, FMLEnvironment.getDist());
+    }
+
+    static void handleClient(ReactorConfigPayload payload, IPayloadContext context, Dist dist) {
+        if (dist == Dist.CLIENT)
             context.enqueueWork(() -> com.justenoughoritech.client.ClientRuntimeConfig.accept(payload));
     }
 }

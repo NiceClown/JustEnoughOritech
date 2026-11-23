@@ -49,20 +49,27 @@ import static org.junit.jupiter.api.Assertions.*;
  * self-contained cross-version physics, config, and version-status verification.
  */
 class OritechMultiVersionCompatTest {
-    private static final Path ATM11_DIR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\All the Mods 11 - ATM11(1)\\minecraft");
-    private static final Path FTB_EVO2_DIR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\FTB Evolution 2\\minecraft");
-    private static final Path EXP12_JAR = ATM11_DIR.resolve("mods\\oritech-2.0.0-exp12.jar");
-    private static final Path EXP14_JAR = FTB_EVO2_DIR.resolve("mods\\oritech-2.0.0-exp14.jar");
-    private static final Path ORITECH_THINGS_JAR = FTB_EVO2_DIR.resolve("mods\\oritechthings-0.1.9.jar");
-    private static final Path APPLIED_ORITECH_JAR = FTB_EVO2_DIR.resolve("mods\\applied_oritech-1.0.7fix-26.1.2.jar");
-    private static final Path LEGACY_1_2_10_JAR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\All the Mods 10 Aeronautics ATM10A\\minecraft\\mods\\oritech-neoforge-1.21.1-1.2.10.jar");
-    private static final Path LEGACY_1_2_11_JAR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\All the Mods 10 - ATM10\\minecraft\\mods\\oritech-neoforge-1.21.1-1.2.11.jar");
-    private static final Path LEGACY_1_2_13_JAR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\atm10aero+mymode\\minecraft\\mods\\oritech-neoforge-1.21.1-1.2.13.jar");
+    private static final Path PRISM_INSTANCES = resolvePrismInstancesDir();
+    private static final Path ATM11_DIR = PRISM_INSTANCES.resolve(Path.of("All the Mods 11 - ATM11(1)", "minecraft"));
+    private static final Path FTB_EVO2_DIR = PRISM_INSTANCES.resolve(Path.of("FTB Evolution 2", "minecraft"));
+    private static final Path EXP12_JAR = ATM11_DIR.resolve(Path.of("mods", "oritech-2.0.0-exp12.jar"));
+    private static final Path EXP14_JAR = FTB_EVO2_DIR.resolve(Path.of("mods", "oritech-2.0.0-exp14.jar"));
+    private static final Path ORITECH_THINGS_JAR = FTB_EVO2_DIR.resolve(Path.of("mods", "oritechthings-0.1.9.jar"));
+    private static final Path APPLIED_ORITECH_JAR = FTB_EVO2_DIR.resolve(Path.of("mods", "applied_oritech-1.0.7fix-26.1.2.jar"));
+    private static final Path LEGACY_1_2_10_JAR = PRISM_INSTANCES.resolve(
+            Path.of("All the Mods 10 Aeronautics ATM10A", "minecraft", "mods", "oritech-neoforge-1.21.1-1.2.10.jar"));
+    private static final Path LEGACY_1_2_11_JAR = PRISM_INSTANCES.resolve(
+            Path.of("All the Mods 10 - ATM10", "minecraft", "mods", "oritech-neoforge-1.21.1-1.2.11.jar"));
+    private static final Path LEGACY_1_2_13_JAR = PRISM_INSTANCES.resolve(
+            Path.of("atm10aero+mymode", "minecraft", "mods", "oritech-neoforge-1.21.1-1.2.13.jar"));
+
+    private static Path resolvePrismInstancesDir() {
+        String override = System.getProperty("jeo.prism.instances");
+        if (override != null && !override.isBlank()) return Path.of(override);
+        String appData = System.getenv("APPDATA");
+        if (appData != null && !appData.isBlank()) return Path.of(appData, "PrismLauncher", "instances");
+        return Path.of(System.getProperty("user.home", "."), "AppData", "Roaming", "PrismLauncher", "instances");
+    }
 
     private static final List<String> WATCHED_REACTOR_CLASSES = List.of(
             "rearth/oritech/block/entity/reactor/NuclearReactorControllerBlockEntity.class",
@@ -166,13 +173,54 @@ class OritechMultiVersionCompatTest {
 
     @Test
     void realAtm11AndFtbEvolution2ConfigsProduceValidDistinctReactorProfiles() throws IOException {
-        Path atmConfig = ATM11_DIR.resolve("config\\oritech-common.toml");
-        Path ftbConfig = FTB_EVO2_DIR.resolve("config\\oritech-common.toml");
+        Path atmConfig = ATM11_DIR.resolve(Path.of("config", "oritech-common.toml"));
+        Path ftbConfig = FTB_EVO2_DIR.resolve(Path.of("config", "oritech-common.toml"));
         Assumptions.assumeTrue(Files.isRegularFile(atmConfig) && Files.isRegularFile(ftbConfig),
                 "ATM11 / FTB Evolution 2 oritech-common.toml files not present");
 
-        Map<String, String> atm = parseReactorSection(Files.readString(atmConfig));
-        Map<String, String> ftb = parseReactorSection(Files.readString(ftbConfig));
+        assertAtm11AndFtbProfiles(Files.readString(atmConfig), Files.readString(ftbConfig));
+    }
+
+    @Test
+    void inlineAtm11AndFtbEvolution2TomlProfilesParseAndEnforceInteriorLimits() {
+        String atmToml = """
+                [reactor]
+                    safeMode = false
+                    safeModeCooldown = 2400
+                    maxSize = 66
+                    reactorMaxEnergyStored = 50000000
+                    reactorMaxEnergyOutput = 25000
+                    rfPerPulse = 128
+                    absorberRate = 16
+                    ventBaseRate = 4
+                    ventRelativeRate = 100
+                    maxHeat = 2000
+                    maxUnstableTicks = 600
+                [arcane]
+                    stabilized_enchanterCostMultiplier = 5
+                """;
+        String ftbToml = """
+                [reactor]
+                    safeMode = false
+                    safeModeCooldown = 2400
+                    maxSize = 16
+                    reactorMaxEnergyStored = 500000000
+                    reactorMaxEnergyOutput = 75000
+                    rfPerPulse = 38
+                    absorberRate = 16
+                    ventBaseRate = 4
+                    ventRelativeRate = 100
+                    maxHeat = 4000
+                    maxUnstableTicks = 400
+                [arcane]
+                    stabilized_enchanterCostMultiplier = 5
+                """;
+        assertAtm11AndFtbProfiles(atmToml, ftbToml);
+    }
+
+    private static void assertAtm11AndFtbProfiles(String atmToml, String ftbToml) {
+        Map<String, String> atm = parseReactorSection(atmToml);
+        Map<String, String> ftb = parseReactorSection(ftbToml);
 
         // ATM11 keeps Oritech defaults (outer 66 -> interior 64)
         assertEquals(66, Integer.parseInt(atm.get("maxSize")));
@@ -193,7 +241,6 @@ class OritechMultiVersionCompatTest {
         assertEquals(14, ftbInteriorLimit);
         var layoutAtLimit = singleRodLayout(ftbInteriorLimit, ftbInteriorLimit, ftbInteriorLimit);
         assertTrue(layoutAtLimit.validationErrors(ftbInteriorLimit).isEmpty());
-        // Outer shell coordinates run 0 .. interior+1, so span = interior+2 == 16 == Oritech maxSize.
         assertEquals(16, layoutAtLimit.width() + 2);
 
         var oversizedLayout = singleRodLayout(15, 15, 15);

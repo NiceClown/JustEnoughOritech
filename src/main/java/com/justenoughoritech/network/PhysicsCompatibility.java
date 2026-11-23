@@ -31,16 +31,22 @@ public final class PhysicsCompatibility {
 
     public static boolean matchesExp12(){
         try{
-            ClassLoader loader=resolveControllerLoader();
+            ClassLoader loader=resolveControllerLoader(
+                    Thread.currentThread().getContextClassLoader(),
+                    PhysicsCompatibility.class.getClassLoader());
             return matchesExp12(loader);
         }catch(Exception|LinkageError exception){return false;}
     }
 
     static boolean matchesExp12(ClassLoader loader){
-        if(loader==null)return false;
+        return matchesFingerprints(loader,EXP12);
+    }
+
+    static boolean matchesFingerprints(ClassLoader loader,Map<String,String> expected){
+        if(loader==null||expected==null||expected.isEmpty())return false;
         try{
             MessageDigest sha=MessageDigest.getInstance("SHA-256");
-            for(var entry:EXP12.entrySet()){
+            for(var entry:expected.entrySet()){
                 try(InputStream stream=loader.getResourceAsStream(entry.getKey())){
                     if(stream==null)return false;
                     String actual=HexFormat.of().formatHex(sha.digest(stream.readAllBytes()));
@@ -51,15 +57,14 @@ public final class PhysicsCompatibility {
         }catch(Exception|LinkageError exception){return false;}
     }
 
-    private static ClassLoader resolveControllerLoader() throws ClassNotFoundException {
-        ClassLoader tccl=Thread.currentThread().getContextClassLoader();
-        if(tccl!=null){
+    static ClassLoader resolveControllerLoader(ClassLoader primary,ClassLoader fallback) throws ClassNotFoundException {
+        if(primary!=null){
             try{
-                return Class.forName(CONTROLLER_CLASS,false,tccl).getClassLoader();
+                return Class.forName(CONTROLLER_CLASS,false,primary).getClassLoader();
             }catch(ClassNotFoundException ignored){
                 // Fall back to the mod classloader when invoked from a thread without NeoForge's TCCL.
             }
         }
-        return Class.forName(CONTROLLER_CLASS,false,PhysicsCompatibility.class.getClassLoader()).getClassLoader();
+        return Class.forName(CONTROLLER_CLASS,false,fallback).getClassLoader();
     }
 }

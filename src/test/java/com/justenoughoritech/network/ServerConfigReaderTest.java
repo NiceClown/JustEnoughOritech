@@ -49,10 +49,21 @@ class ServerConfigReaderTest {
     }
 
     /** Simulates a non-Supplier config holder exposing only a public get() method (like custom config wrappers). */
+    public interface PublicHolderContract<T> {
+        T get();
+    }
+
     public static final class ReflectiveHolder<T> {
         private final T value;
         public ReflectiveHolder(T value) { this.value = value; }
         public T get() { return value; }
+    }
+
+    /** Private non-Supplier holder implementing a public interface to verify invokePublic in value(). */
+    private static final class PrivateReflectiveHolder<T> implements PublicHolderContract<T> {
+        private final T value;
+        PrivateReflectiveHolder(T value) { this.value = value; }
+        @Override public T get() { return value; }
     }
 
     /** Private Supplier implementation to verify non-public Supplier classes do not fail reflective access. */
@@ -66,7 +77,7 @@ class ServerConfigReaderTest {
         public static final ReflectiveHolder<Long> maxSize = new ReflectiveHolder<>(34L);
         public static final PrivateSupplier<Short> rfPerPulse = new PrivateSupplier<>((short) 64);
         public static final PrivateSupplier<Byte> absorberRate = new PrivateSupplier<>((byte) 12);
-        public static final ReflectiveHolder<Integer> ventBaseRate = new ReflectiveHolder<>(0);
+        public static final PrivateReflectiveHolder<Integer> ventBaseRate = new PrivateReflectiveHolder<>(0);
         public static final ReflectiveHolder<Integer> ventRelativeRate = new ReflectiveHolder<>(50);
         public static final ReflectiveHolder<Integer> maxHeat = new ReflectiveHolder<>(3000);
         public static final ReflectiveHolder<Integer> maxUnstableTicks = new ReflectiveHolder<>(0);
@@ -106,6 +117,32 @@ class ServerConfigReaderTest {
         public static final Supplier<Double> maxSize = () -> 66.5d;
     }
 
+    public static final class ExactIntBoundsLongConfig {
+        public static final Supplier<Long> maxSize = () -> (long) Integer.MAX_VALUE;
+        public static final Supplier<Long> rfPerPulse = () -> (long) Integer.MAX_VALUE;
+        public static final Supplier<Long> absorberRate = () -> 16L;
+        public static final Supplier<Long> ventBaseRate = () -> (long) Integer.MIN_VALUE;
+        public static final Supplier<Long> ventRelativeRate = () -> 100L;
+        public static final Supplier<Long> maxHeat = () -> 2000L;
+        public static final Supplier<Long> maxUnstableTicks = () -> 600L;
+        public static final Supplier<Long> reactorMaxEnergyOutput = () -> 25_000L;
+        public static final Supplier<Boolean> safeMode = () -> false;
+        public static final Supplier<Long> safeModeCooldown = () -> 2400L;
+    }
+
+    public static final class NullBoolConfig {
+        public static final Supplier<Integer> maxSize = () -> 66;
+        public static final Supplier<Integer> rfPerPulse = () -> 128;
+        public static final Supplier<Integer> absorberRate = () -> 16;
+        public static final Supplier<Integer> ventBaseRate = () -> 4;
+        public static final Supplier<Integer> ventRelativeRate = () -> 100;
+        public static final Supplier<Integer> maxHeat = () -> 2000;
+        public static final Supplier<Integer> maxUnstableTicks = () -> 600;
+        public static final Supplier<Integer> reactorMaxEnergyOutput = () -> 25_000;
+        public static final Supplier<Boolean> safeMode = () -> null;
+        public static final Supplier<Integer> safeModeCooldown = () -> 2400;
+    }
+
     public static final class WrongBoolTypeConfig {
         public static final Supplier<Integer> maxSize = () -> 66;
         public static final Supplier<Integer> rfPerPulse = () -> 128;
@@ -121,8 +158,41 @@ class ServerConfigReaderTest {
 
     // --- Synthetic recipe fixtures ---
 
-    public record SyntheticOritechRecipe(Object type, List<?> itemInputs, int time, Object fluidInput) {
+    public record SyntheticOritechRecipe(Object type, Object itemInputs, int time, Object fluidInput) {
         public Object getType() { return type; }
+    }
+
+    /** Public recipe contract mirroring net.minecraft.world.item.crafting.Recipe without MC bootstrap. */
+    public interface PublicRecipeContract {
+        Object getType();
+    }
+
+    /** Private class implementing a public interface (simulates non-public mod/KubeJS Recipe classes). */
+    private static final class PrivateModRecipe implements PublicRecipeContract {
+        private final Object type;
+        PrivateModRecipe(Object type) { this.type = type; }
+        @Override public Object getType() { return type; }
+    }
+
+    /** Public base class extended by a private subclass overriding getType(). */
+    public static class PublicBaseRecipe {
+        private final Object type;
+        public PublicBaseRecipe(Object type) { this.type = type; }
+        public Object getType() { return type; }
+    }
+
+    private static final class PrivateSubclassRecipe extends PublicBaseRecipe {
+        PrivateSubclassRecipe(Object type) { super(type); }
+        @Override public Object getType() { return super.getType(); }
+    }
+
+    /** Public class nested inside a private outer class: Modifier.isPublic is true, yet canAccess is false! */
+    private static final class HiddenOuter {
+        public static final class NestedPublicRecipe implements PublicRecipeContract {
+            private final Object type;
+            public NestedPublicRecipe(Object type) { this.type = type; }
+            @Override public Object getType() { return type; }
+        }
     }
 
     public static final class MalformedRecipeMissingTime {
@@ -167,18 +237,32 @@ class ServerConfigReaderTest {
 
         ServerConfigReader.ConfigValues mixed = ServerConfigReader.readConfig(MixedHolderSchemaConfig.class);
         assertEquals(new ServerConfigReader.ConfigValues(32, 64, 12, 0, 50, 3000, 0, 100_000, true, 1200), mixed);
+
+        ServerConfigReader.ConfigValues bounds = ServerConfigReader.readConfig(ExactIntBoundsLongConfig.class);
+        assertEquals(Integer.MAX_VALUE - 2, bounds.maxSize());
+        assertEquals(Integer.MAX_VALUE, bounds.rfPerPulse());
+        assertEquals(Integer.MIN_VALUE, bounds.ventBaseRate());
     }
 
     @Test
     void readConfigRejectsMalformedOrUnloadedSchemasCleanly() {
         assertThrows(NoSuchFieldException.class, () -> ServerConfigReader.readConfig(MissingFieldConfig.class));
         assertThrows(IllegalStateException.class, () -> ServerConfigReader.readConfig(NullHolderConfig.class));
-        assertThrows(IllegalArgumentException.class, () -> ServerConfigReader.readConfig(NullValueConfig.class));
+        IllegalArgumentException nullInt = assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigReader.readConfig(NullValueConfig.class));
+        assertTrue(nullInt.getMessage().contains("null"), nullInt.getMessage());
         assertThrows(IllegalStateException.class, () -> ServerConfigReader.readConfig(UnloadedNeoForgeConfig.class));
         assertThrows(IllegalArgumentException.class, () -> ServerConfigReader.readConfig(OverflowLongConfig.class));
         assertThrows(IllegalArgumentException.class, () -> ServerConfigReader.readConfig(UnderflowLongConfig.class));
-        assertThrows(IllegalArgumentException.class, () -> ServerConfigReader.readConfig(FloatingPointConfig.class));
-        assertThrows(IllegalArgumentException.class, () -> ServerConfigReader.readConfig(WrongBoolTypeConfig.class));
+        IllegalArgumentException fp = assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigReader.readConfig(FloatingPointConfig.class));
+        assertTrue(fp.getMessage().contains("java.lang.Double"), fp.getMessage());
+        IllegalArgumentException nullBool = assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigReader.readConfig(NullBoolConfig.class));
+        assertTrue(nullBool.getMessage().contains("null"), nullBool.getMessage());
+        IllegalArgumentException wrongBool = assertThrows(IllegalArgumentException.class,
+                () -> ServerConfigReader.readConfig(WrongBoolTypeConfig.class));
+        assertTrue(wrongBool.getMessage().contains("java.lang.String"), wrongBool.getMessage());
     }
 
     @Test
@@ -223,48 +307,96 @@ class ServerConfigReaderTest {
     }
 
     @Test
-    void buildPayloadClampsLongVersionAndCapsOversizedResourceLists() {
-        var values = new ServerConfigReader.ConfigValues(14, 38, 16, 4, 100, 4000, 400, 75_000, false, 2400);
-        var manyFuels = new ArrayList<ReactorConfigPayload.FuelOption>();
-        var manyCoolants = new ArrayList<String>();
-        for (int i = 0; i < 4500; i++) {
+    void buildPayloadForwardsAllFieldsPreservesWithinLimitAndCapsOversizedLists() {
+        var values = new ServerConfigReader.ConfigValues(14, 38, 16, 4, 100, 4000, 400, 75_000, true, 1200);
+
+        // Normal small lists (<= MAX_RESOURCES) must pass through intact along with all 10 config values
+        var smallFuels = List.of(
+                new ReactorConfigPayload.FuelOption("oritech:small_uranium_pellet", 400),
+                new ReactorConfigPayload.FuelOption("oritech:uranium_pellet", 4000));
+        var smallCoolants = List.of("minecraft:blue_ice", "minecraft:ice", "minecraft:packed_ice");
+        ReactorConfigPayload normal = ServerConfigReader.buildPayload(
+                "2.0.0-exp14", values, smallFuels, smallCoolants, true, true);
+        assertTrue(normal.compatible());
+        assertEquals("2.0.0-exp14", normal.oritechVersion());
+        assertEquals(14, normal.maxSize());
+        assertEquals(38, normal.rfPerPulse());
+        assertEquals(16, normal.absorberRate());
+        assertEquals(4, normal.ventBaseRate());
+        assertEquals(100, normal.ventRelativeRate());
+        assertEquals(4000, normal.maxHeat());
+        assertEquals(400, normal.maxUnstableTicks());
+        assertEquals(75_000, normal.outputPerPort());
+        assertTrue(normal.safeMode());
+        assertEquals(1200, normal.safeModeCooldown());
+        assertEquals(smallFuels, normal.fuels());
+        assertEquals(smallCoolants, normal.coolants());
+        assertEquals("", normal.compatibilityIssue());
+
+        // Exact MAX_RESOURCES boundary is preserved without truncation
+        var exactFuels = new ArrayList<ReactorConfigPayload.FuelOption>(ReactorConfigPayload.MAX_RESOURCES);
+        var exactCoolants = new ArrayList<String>(ReactorConfigPayload.MAX_RESOURCES);
+        for (int i = 0; i < ReactorConfigPayload.MAX_RESOURCES; i++) {
+            exactFuels.add(new ReactorConfigPayload.FuelOption("mod:fuel_" + i, 100 + i));
+            exactCoolants.add("mod:coolant_" + i);
+        }
+        ReactorConfigPayload exact = ServerConfigReader.buildPayload(
+                "2.0.0-exp14", values, exactFuels, exactCoolants, true, true);
+        assertEquals(ReactorConfigPayload.MAX_RESOURCES, exact.fuels().size());
+        assertEquals(ReactorConfigPayload.MAX_RESOURCES, exact.coolants().size());
+
+        // Oversized lists (> MAX_RESOURCES) are capped cleanly and long version strings clamped to 64 chars
+        var manyFuels = new ArrayList<>(exactFuels);
+        var manyCoolants = new ArrayList<>(exactCoolants);
+        for (int i = ReactorConfigPayload.MAX_RESOURCES; i < 4500; i++) {
             manyFuels.add(new ReactorConfigPayload.FuelOption("mod:fuel_" + i, 100 + i));
             manyCoolants.add("mod:coolant_" + i);
         }
-
         String longVersion = "2.0.0-exp15+git." + "a".repeat(80);
-        ReactorConfigPayload payload = ServerConfigReader.buildPayload(
+        ReactorConfigPayload capped = ServerConfigReader.buildPayload(
                 longVersion, values, manyFuels, manyCoolants, true, true);
-
-        assertTrue(payload.compatible());
-        assertEquals("", payload.compatibilityIssue());
-        assertEquals(ReactorConfigPayload.MAX_VERSION_LENGTH, payload.oritechVersion().length());
-        assertTrue(longVersion.startsWith(payload.oritechVersion()));
-        assertEquals(ReactorConfigPayload.MAX_RESOURCES, payload.fuels().size());
-        assertEquals(ReactorConfigPayload.MAX_RESOURCES, payload.coolants().size());
+        assertTrue(capped.compatible());
+        assertEquals(ReactorConfigPayload.MAX_VERSION_LENGTH, capped.oritechVersion().length());
+        assertTrue(longVersion.startsWith(capped.oritechVersion()));
+        assertEquals(ReactorConfigPayload.MAX_RESOURCES, capped.fuels().size());
+        assertEquals(ReactorConfigPayload.MAX_RESOURCES, capped.coolants().size());
 
         assertEquals("unknown", ServerConfigReader.clampVersion(null));
         assertEquals("unknown", ServerConfigReader.clampVersion("   "));
         assertEquals("2.0.0-exp14", ServerConfigReader.clampVersion("2.0.0-exp14"));
+        String exactMaxVersion = "v".repeat(ReactorConfigPayload.MAX_VERSION_LENGTH);
+        assertEquals(exactMaxVersion, ServerConfigReader.clampVersion(exactMaxVersion));
     }
 
     @Test
-    void extractFuelsHandlesOritechRecipesAndFiltersInvalidOrFluidEntriesDeterministically() throws Exception {
+    void extractFuelsHandlesOritechRecipesNonPublicRecipesAndFiltersInvalidEntriesDeterministically() throws Exception {
         Object reactorType = new Object();
         Object pulverizerType = new Object();
+        Object otherModType = new Object();
+        PublicRecipeContract anonymousRecipe = new PublicRecipeContract() {
+            @Override public Object getType() { return otherModType; }
+        };
 
         List<Object> recipes = List.of(
-                // Valid Oritech 2.0.0 recipes in intentionally unsorted order
+                // Private, subclass, hidden-outer nested public, and anonymous Recipe implementations must NOT throw!
+                new PrivateModRecipe(otherModType),
+                new PrivateSubclassRecipe(otherModType),
+                new HiddenOuter.NestedPublicRecipe(otherModType),
+                anonymousRecipe,
+                // Valid Oritech 2.0.0 recipes in intentionally unsorted order (including duration == 1 boundary)
                 new SyntheticOritechRecipe(reactorType, List.of("oritech:uranium_pellet"), 4000, Optional.empty()),
                 new SyntheticOritechRecipe(reactorType, List.of("oritech:small_uranium_pellet"), 400, Optional.empty()),
                 new SyntheticOritechRecipe(reactorType, List.of("oritech:plutonium_pellet"), 40_000, Optional.empty()),
                 new SyntheticOritechRecipe(reactorType, List.of("oritech:small_plutonium_pellet"), 4000, null),
-                // Multi-item tag ingredient (expands to 2 items + ignored air/blank)
+                new SyntheticOritechRecipe(reactorType, List.of("mod:min_duration"), 1, Optional.empty()),
+                // Multi-item tag ingredient (expands to 2 valid items + ignored null/air/blank)
                 new SyntheticOritechRecipe(reactorType, List.of("#tag:custom_fuels"), 1200, Optional.empty()),
                 // Duplicate uranium_pellet later in list must keep first duration (4000, not 9999)
                 new SyntheticOritechRecipe(reactorType, List.of("oritech:uranium_pellet"), 9999, Optional.empty()),
                 // Filtered cases:
                 new SyntheticOritechRecipe(pulverizerType, List.of("oritech:copper_ore"), 200, Optional.empty()),
+                new SyntheticOritechRecipe(reactorType, null, 4000, Optional.empty()),
+                new SyntheticOritechRecipe(reactorType, "not_a_list", 4000, Optional.empty()),
                 new SyntheticOritechRecipe(reactorType, List.of(), 4000, Optional.empty()),
                 new SyntheticOritechRecipe(reactorType, List.of("a:one", "a:two"), 4000, Optional.empty()),
                 new SyntheticOritechRecipe(reactorType, List.of("a:zero_time"), 0, Optional.empty()),
@@ -275,7 +407,7 @@ class ServerConfigReaderTest {
 
         var fuels = ServerConfigReader.extractFuels(recipes, reactorType, raw -> {
             if ("#tag:custom_fuels".equals(raw)) {
-                return List.of("mod:fuel_b", "minecraft:air", "", "mod:fuel_a");
+                return Arrays.asList("mod:fuel_b", null, "minecraft:air", "", "   ", "mod:fuel_a");
             }
             return List.of(raw.toString());
         });
@@ -283,6 +415,7 @@ class ServerConfigReaderTest {
         assertEquals(List.of(
                 new ReactorConfigPayload.FuelOption("mod:fuel_a", 1200),
                 new ReactorConfigPayload.FuelOption("mod:fuel_b", 1200),
+                new ReactorConfigPayload.FuelOption("mod:min_duration", 1),
                 new ReactorConfigPayload.FuelOption("oritech:plutonium_pellet", 40_000),
                 new ReactorConfigPayload.FuelOption("oritech:small_plutonium_pellet", 4000),
                 new ReactorConfigPayload.FuelOption("oritech:small_uranium_pellet", 400),
@@ -362,16 +495,19 @@ class ServerConfigReaderTest {
     void discoverCoolantsReturnsSortedItemsAndHandlesInvalidTagContentSchemas() throws Exception {
         List<String> items = Arrays.asList(
                 "minecraft:packed_ice", null, "minecraft:air", "minecraft:stone",
-                "minecraft:ice", "minecraft:blue_ice", "mod:blank_key"
+                "minecraft:ice", "minecraft:blue_ice", "mod:blank_key", "mod:null_key"
         );
-        Set<String> tagged = Set.of("minecraft:packed_ice", "minecraft:ice", "minecraft:blue_ice", "mod:blank_key");
+        // Include minecraft:air and mod:null_key in tagged set to prove AIR and null/blank keys are filtered out!
+        Set<String> tagged = Set.of(
+                "minecraft:air", "minecraft:packed_ice", "minecraft:ice",
+                "minecraft:blue_ice", "mod:blank_key", "mod:null_key");
 
         List<String> discovered = ServerConfigReader.discoverCoolants(
                 ValidTagContent.class,
                 items,
                 "minecraft:air"::equals,
                 (item, tag) -> tag.equals(ValidTagContent.REACTOR_COOLANT) && tagged.contains(item),
-                item -> "mod:blank_key".equals(item) ? "   " : item
+                item -> "mod:null_key".equals(item) ? null : "mod:blank_key".equals(item) ? "   " : item
         );
         assertEquals(List.of("minecraft:blue_ice", "minecraft:ice", "minecraft:packed_ice"), discovered);
 

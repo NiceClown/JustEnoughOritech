@@ -8,9 +8,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.classfile.ClassFile;
 import java.lang.constant.ClassDesc;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -18,12 +22,21 @@ import java.util.zip.ZipFile;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PhysicsCompatibilityTest {
-    private static final Path EXP12_JAR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\All the Mods 11 - ATM11(1)\\minecraft\\mods\\oritech-2.0.0-exp12.jar");
-    private static final Path EXP14_JAR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\FTB Evolution 2\\minecraft\\mods\\oritech-2.0.0-exp14.jar");
-    private static final Path LEGACY_1_2_13_JAR = Path.of(
-            "C:\\Users\\Kirill\\AppData\\Roaming\\PrismLauncher\\instances\\atm10aero+mymode\\minecraft\\mods\\oritech-neoforge-1.21.1-1.2.13.jar");
+    private static final Path PRISM_INSTANCES = resolvePrismInstancesDir();
+    private static final Path EXP12_JAR = PRISM_INSTANCES.resolve(
+            Path.of("All the Mods 11 - ATM11(1)", "minecraft", "mods", "oritech-2.0.0-exp12.jar"));
+    private static final Path EXP14_JAR = PRISM_INSTANCES.resolve(
+            Path.of("FTB Evolution 2", "minecraft", "mods", "oritech-2.0.0-exp14.jar"));
+    private static final Path LEGACY_1_2_13_JAR = PRISM_INSTANCES.resolve(
+            Path.of("atm10aero+mymode", "minecraft", "mods", "oritech-neoforge-1.21.1-1.2.13.jar"));
+
+    private static Path resolvePrismInstancesDir() {
+        String override = System.getProperty("jeo.prism.instances");
+        if (override != null && !override.isBlank()) return Path.of(override);
+        String appData = System.getenv("APPDATA");
+        if (appData != null && !appData.isBlank()) return Path.of(appData, "PrismLauncher", "instances");
+        return Path.of(System.getProperty("user.home", "."), "AppData", "Roaming", "PrismLauncher", "instances");
+    }
 
     @Test
     void expectedFingerprintsCoverAllFourteenReactorClassesWithValidSha256() {
@@ -102,6 +115,62 @@ class PhysicsCompatibilityTest {
         }
         ClassLoader loader = new StubControllerClassLoader(fake);
         withTccl(loader, () -> assertFalse(PhysicsCompatibility.matchesExp12()));
+    }
+
+    @Test
+    void selfContainedSyntheticFingerprintsVerifyMatchTamperMissingAndEmptyGuards() throws Exception {
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        var resources = new LinkedHashMap<String, byte[]>();
+        var expected = new LinkedHashMap<String, String>();
+        for (int i = 0; i < 4; i++) {
+            String path = "rearth/oritech/synthetic/ReactorPart" + i + ".class";
+            byte[] payload = ("reactor-bytecode-v2-" + i).getBytes(StandardCharsets.UTF_8);
+            resources.put(path, payload);
+            expected.put(path, HexFormat.of().formatHex(sha.digest(payload)));
+        }
+
+        // Exact match returns true on any machine without external JARs
+        assertTrue(PhysicsCompatibility.matchesFingerprints(new MapClassLoader(resources), expected));
+
+        // Null/empty expected map or null loader returns false
+        assertFalse(PhysicsCompatibility.matchesFingerprints(null, expected));
+        assertFalse(PhysicsCompatibility.matchesFingerprints(new MapClassLoader(resources), null));
+        assertFalse(PhysicsCompatibility.matchesFingerprints(new MapClassLoader(resources), Map.of()));
+
+        // Every single entry is enforced against 1-bit tamper, length change, and omission
+        for (String path : expected.keySet()) {
+            var missing = new HashMap<>(resources);
+            missing.remove(path);
+            assertFalse(PhysicsCompatibility.matchesFingerprints(new MapClassLoader(missing), expected),
+                    "Missing entry must fail: " + path);
+
+            var flipped = new HashMap<>(resources);
+            byte[] mutated = flipped.get(path).clone();
+            mutated[mutated.length - 1] ^= 0x01;
+            flipped.put(path, mutated);
+            assertFalse(PhysicsCompatibility.matchesFingerprints(new MapClassLoader(flipped), expected),
+                    "1-bit tamper must fail: " + path);
+
+            var extended = new HashMap<>(resources);
+            byte[] longer = new byte[resources.get(path).length + 1];
+            System.arraycopy(resources.get(path), 0, longer, 0, resources.get(path).length);
+            extended.put(path, longer);
+            assertFalse(PhysicsCompatibility.matchesFingerprints(new MapClassLoader(extended), expected),
+                    "Trailing byte must fail: " + path);
+        }
+    }
+
+    @Test
+    void resolveControllerLoaderFallsBackWhenTcclMissesOrIsNull() throws Exception {
+        ClassLoader empty = new MapClassLoader(Map.of());
+        ClassLoader primaryHit = new StubControllerClassLoader(Map.of());
+        ClassLoader fallbackHit = new StubControllerClassLoader(Map.of());
+
+        assertSame(primaryHit, PhysicsCompatibility.resolveControllerLoader(primaryHit, empty));
+        assertSame(fallbackHit, PhysicsCompatibility.resolveControllerLoader(empty, fallbackHit));
+        assertSame(fallbackHit, PhysicsCompatibility.resolveControllerLoader(null, fallbackHit));
+        assertThrows(ClassNotFoundException.class,
+                () -> PhysicsCompatibility.resolveControllerLoader(empty, empty));
     }
 
     @Test

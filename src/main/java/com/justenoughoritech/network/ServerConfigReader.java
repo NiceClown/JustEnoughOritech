@@ -16,6 +16,7 @@ import net.neoforged.fml.ModList;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -115,14 +116,10 @@ public final class ServerConfigReader {
         var fuels = new TreeMap<String, Integer>();
         for (Object recipe : recipes) {
             if (recipe == null) continue;
-            Method getTypeMethod = recipe.getClass().getMethod("getType");
-            if (!Objects.equals(getTypeMethod.invoke(recipe), reactorType)) continue;
-            Method inputsMethod = recipe.getClass().getMethod("itemInputs");
-            Method durationMethod = recipe.getClass().getMethod("time");
-            Method fluidMethod = recipe.getClass().getMethod("fluidInput");
-            Object rawInputs = inputsMethod.invoke(recipe);
-            Object rawFluid = fluidMethod.invoke(recipe);
-            Object rawDuration = durationMethod.invoke(recipe);
+            if (!Objects.equals(invokePublic(recipe, "getType"), reactorType)) continue;
+            Object rawInputs = invokePublic(recipe, "itemInputs");
+            Object rawFluid = invokePublic(recipe, "fluidInput");
+            Object rawDuration = invokePublic(recipe, "time");
             if (!(rawDuration instanceof Number number))
                 throw new IllegalArgumentException("Expected numeric reactor recipe duration");
             int duration = number.intValue();
@@ -158,11 +155,15 @@ public final class ServerConfigReader {
         Class<?> content = Class.forName("rearth.oritech.init.recipes.RecipeContent");
         Optional<RecipeType<?>> reactorType = readReactorRecipeType(content);
         if (reactorType.isEmpty()) return List.of();
-        var sortedHolders = new ArrayList<RecipeHolder<?>>(manager.getRecipes());
-        sortedHolders.sort(Comparator.comparing(holder -> holder.id().toString()));
-        var recipes = new ArrayList<Object>(sortedHolders.size());
-        for (RecipeHolder<?> holder : sortedHolders) recipes.add(holder.value());
-        return extractFuels(recipes, reactorType.get(), rawIngredient -> {
+        RecipeType<?> expectedType = reactorType.get();
+        var matchingHolders = new ArrayList<RecipeHolder<?>>();
+        for (RecipeHolder<?> holder : manager.getRecipes()) {
+            if (Objects.equals(holder.value().getType(), expectedType)) matchingHolders.add(holder);
+        }
+        matchingHolders.sort(Comparator.comparing(holder -> holder.id().toString()));
+        var recipes = new ArrayList<Object>(matchingHolders.size());
+        for (RecipeHolder<?> holder : matchingHolders) recipes.add(holder.value());
+        return extractFuels(recipes, expectedType, rawIngredient -> {
             if (!(rawIngredient instanceof Ingredient ingredient)) return List.of();
             var ids = new ArrayList<String>();
             for (Holder<Item> item : ingredient.items().toList()) {
@@ -239,12 +240,50 @@ public final class ServerConfigReader {
                 ? List.copyOf(items) : List.copyOf(items.subList(0, ReactorConfigPayload.MAX_RESOURCES));
     }
 
+    private static Object invokePublic(Object target, String methodName) throws ReflectiveOperationException {
+        Class<?> cls = target.getClass();
+        Method method = findAccessibleMethod(cls, target, methodName);
+        if (method == null) method = cls.getMethod(methodName);
+        return method.invoke(target);
+    }
+
+    private static Method findAccessibleMethod(Class<?> type, Object target, String name) {
+        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+            Method candidate = accessibleMethod(current, target, name);
+            if (candidate != null) return candidate;
+            for (Class<?> iface : current.getInterfaces()) {
+                Method fromInterface = findAccessibleInterfaceMethod(iface, target, name);
+                if (fromInterface != null) return fromInterface;
+            }
+        }
+        return null;
+    }
+
+    private static Method findAccessibleInterfaceMethod(Class<?> iface, Object target, String name) {
+        Method candidate = accessibleMethod(iface, target, name);
+        if (candidate != null) return candidate;
+        for (Class<?> parent : iface.getInterfaces()) {
+            Method found = findAccessibleInterfaceMethod(parent, target, name);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static Method accessibleMethod(Class<?> type, Object target, String name) {
+        if (!Modifier.isPublic(type.getModifiers())) return null;
+        try {
+            Method method = type.getMethod(name);
+            if (!Modifier.isStatic(method.getModifiers()) && method.canAccess(target)) return method;
+        } catch (NoSuchMethodException ignored) {}
+        return null;
+    }
+
     private static Object value(Class<?> type, String name) throws ReflectiveOperationException {
         Field field = type.getField(name);
         Object holder = field.get(null);
         if (holder == null) throw new IllegalStateException("Null config holder: " + name);
         if (holder instanceof Supplier<?> supplier) return supplier.get();
-        return holder.getClass().getMethod("get").invoke(holder);
+        return invokePublic(holder, "get");
     }
 
     private static int integer(Class<?> type, String name) throws ReflectiveOperationException {
