@@ -1,7 +1,8 @@
 {
   "variants": {
-    "": {
-      "model": "just_enough_oritech:block/reactor_printer"
-    }
+    "facing=north": { "model": "just_enough_oritech:block/reactor_printer" },
+    "facing=east":  { "model": "just_enough_oritech:block/reactor_printer", "y": 90 },
+    "facing=south": { "model": "just_enough_oritech:block/reactor_printer", "y": 180 },
+    "facing=west":  { "model": "just_enough_oritech:block/reactor_printer", "y": 270 }
   }
 }

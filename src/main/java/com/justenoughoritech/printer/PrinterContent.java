@@ -42,6 +42,11 @@ public final class PrinterContent {
             MENUS.register("reactor_printer",() -> new MenuType<>(
                     (net.neoforged.neoforge.network.IContainerFactory<PrinterMenu>)(id,inventory,buf) ->
                             new PrinterMenu(id,inventory,buf.readBlockPos()), FeatureFlags.DEFAULT_FLAGS));
+    public static final Supplier<MenuType<BlueprintBenchMenu>> BENCH_MENU =
+            MENUS.register("blueprint_bench", () -> new MenuType<>(
+                    (net.neoforged.neoforge.network.IContainerFactory<BlueprintBenchMenu>) (id, inventory, buf) ->
+                            new BlueprintBenchMenu(id, inventory, BlueprintData.STREAM_CODEC.decode(buf)),
+                    FeatureFlags.DEFAULT_FLAGS));
 
     private PrinterContent() {}
     public static List<Component> instructions() {

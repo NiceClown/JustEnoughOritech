@@ -4,6 +4,7 @@ import org.joml.Vector2i;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -14,10 +15,13 @@ public final class ReactorSimulation {
     public static final class Cell {
         public final int x, z;
         public final ReactorParts.Part part;
-        public int heat, pulses;
+        public int heat, pulses, lastHeatDelta, lastCoolingWork;
+        private int heatBefore;
         private int fuelRemaining, coolantRemaining;
         private Cell[] neighbors = new Cell[0];
         Cell(int x, int z, ReactorParts.Part part) { this.x=x; this.z=z; this.part=part; }
+        public int fuelRemaining() { return fuelRemaining; }
+        public int coolantRemaining() { return coolantRemaining; }
     }
 
     private static final int GRAPH_SIZE = 96;
@@ -83,6 +87,10 @@ public final class ReactorSimulation {
         int activeRods=0, hottest=0;
         generation=0;
         for (Cell c : order) {
+            c.heatBefore = c.heat;
+            c.lastCoolingWork = 0;
+        }
+        for (Cell c : order) {
             int heat=c.heat;
             switch (c.part.kind()) {
                 case ROD -> {
@@ -100,6 +108,7 @@ public final class ReactorSimulation {
                         int diff=n.heat-heat;
                         int moved=Math.min(diff/4+10,diff);
                         n.heat-=moved; heat+=moved;
+                        c.lastCoolingWork += moved;
                     }
                 }
                 case ABSORBER -> {
@@ -110,7 +119,9 @@ public final class ReactorSimulation {
                     int removed=0;
                     if (c.coolantRemaining >= layout.height()) {
                         for (Cell n:c.neighbors) if(n.heat>0) {
+                            int actual = Math.min(n.heat, config.absorberRate());
                             n.heat-=config.absorberRate(); removed+=config.absorberRate();
+                            c.lastCoolingWork += actual;
                         }
                         if(removed>0)c.coolantRemaining-=layout.height();
                     } else if (c.coolantRemaining > 0) {
@@ -124,6 +135,7 @@ public final class ReactorSimulation {
                         int rel=Math.max(1,config.ventRelativeRate());
                         int removed=Math.clamp(max/rel+config.ventBaseRate(),0,max);
                         target.heat-=removed;
+                        c.lastCoolingWork = removed;
                     }
                 }
                 default -> { }
@@ -131,6 +143,7 @@ public final class ReactorSimulation {
             c.heat=heat;
             hottest=Math.max(hottest,heat);
         }
+        for (Cell c : order) c.lastHeatDelta = c.heat - c.heatBefore;
         ticks++;
         maxHeatSeen=Math.max(maxHeatSeen,hottest);
         heatHistory[historyCursor]=hottest;
@@ -213,4 +226,75 @@ public final class ReactorSimulation {
     public int totalCells(){return order.length;}
     public ReactorInputs.Fuel fuel(){return fuel;}
     public net.minecraft.world.item.ItemStack coolant(){return coolant;}
+
+    public long cellGeneration(Cell cell) {
+        if (cell == null || cell.part.kind() != ReactorParts.Kind.ROD) return 0L;
+        return (long) config.rfPerPulse() * cell.pulses * layout.height();
+    }
+
+    public int cellHeatGeneration(Cell cell) {
+        if (cell == null || cell.part.kind() != ReactorParts.Kind.ROD) return 0;
+        return cell.pulses / 2 * cell.pulses + 4;
+    }
+
+    public double fuelPerSecond() {
+        if (fuel == null || fuel.duration() <= 0) return 0.0;
+        double rate = 0.0;
+        for (Cell c : order) {
+            if (c.part.kind() == ReactorParts.Kind.ROD) {
+                rate += (double) c.part.rodCount() * layout.height() * 20.0 / fuel.duration();
+            }
+        }
+        return rate;
+    }
+
+    public double fuelPerMinute() { return fuelPerSecond() * 60.0; }
+    public double fuelPerHour() { return fuelPerSecond() * 3600.0; }
+    public double fuelStackRuntimeSeconds() {
+        double rate = fuelPerSecond();
+        return rate > 0.0 ? 64.0 / rate : Double.POSITIVE_INFINITY;
+    }
+    public long rfPerFuelItem() {
+        double rate = fuelPerSecond();
+        return rate > 0.0 ? Math.round(exportRate() * 20.0 / rate) : 0L;
+    }
+
+    public double coolantPerSecond() {
+        if (!usesCoolant()) return 0.0;
+        if (status == Status.STEADY) return steadyCoolantPerSecond;
+        return ticks > 0 ? 20.0 * coolantItems / ticks : 0.0;
+    }
+    public double coolantPerMinute() { return coolantPerSecond() * 60.0; }
+    public double coolantPerHour() { return coolantPerSecond() * 3600.0; }
+    public double coolantStackRuntimeSeconds() {
+        double rate = coolantPerSecond();
+        return rate > 0.0 ? 64.0 / rate : Double.POSITIVE_INFINITY;
+    }
+
+    public static String formatRate(double value) {
+        if (value <= 0.0) return "0";
+        if (value < 0.01) return String.format(Locale.ROOT, "%.3f", value);
+        if (value < 10.0) return String.format(Locale.ROOT, "%.2f", value);
+        if (value < 100.0) return String.format(Locale.ROOT, "%.1f", value);
+        return String.format(Locale.ROOT, "%.0f", value);
+    }
+
+    public static String formatDuration(double seconds) {
+        if (!Double.isFinite(seconds) || seconds <= 0.0) return "∞";
+        long total = Math.round(seconds);
+        if (total < 60) return total + "s";
+        long minutes = total / 60;
+        long sec = total % 60;
+        if (minutes < 60) return minutes + "m " + sec + "s";
+        long hours = minutes / 60;
+        long remMin = minutes % 60;
+        return hours + "h " + remMin + "m";
+    }
+
+    public static String formatEnergy(long rf) {
+        if (rf < 1_000L) return rf + " RF";
+        if (rf < 1_000_000L) return String.format(Locale.ROOT, "%.1f kRF", rf / 1_000.0);
+        if (rf < 1_000_000_000L) return String.format(Locale.ROOT, "%.2f MRF", rf / 1_000_000.0);
+        return String.format(Locale.ROOT, "%.2f GRF", rf / 1_000_000_000.0);
+    }
 }

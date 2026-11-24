@@ -4,7 +4,6 @@ import com.justenoughoritech.sim.ReactorDesigner;
 import com.justenoughoritech.sim.ReactorParts;
 import com.justenoughoritech.sim.ReactorSimulation;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
@@ -23,13 +22,15 @@ import static com.justenoughoritech.client.SimulatorWidget.tr;
 
 final class AutoDesignScreen extends Screen {
     private static final Workbench WB=Workbench.INSTANCE;
-    private static final int LIGHT=0xFFF1F3F5, MUTED=0xFFB8C4D0, WARNING=0xFFFF9A83;
     private static final int HEIGHT=244;
     private final Screen parent;
     private final TextViewport text=new TextViewport();
     private final List<ReactorParts.Part> rods;
     private final Set<String> allowed=new LinkedHashSet<>();
-    private final List<Button> rodButtons=new ArrayList<>();
+    private CycleButton<ReactorDesigner.Risk> riskButton;
+    private CycleButton<ReactorDesigner.CoolingMode> coolingButton;
+    private OritechButton search, resize, applySafe, applyDanger;
+    private final List<OritechButton> rodButtons=new ArrayList<>();
     private final List<Integer> rodPositions=new ArrayList<>();
     private ReactorDesigner.Risk risk=ReactorDesigner.Risk.NORMAL;
     private ReactorDesigner.CoolingMode coolingMode=ReactorDesigner.CoolingMode.AUTO;
@@ -38,9 +39,6 @@ final class AutoDesignScreen extends Screen {
     private DesignGuard guard;
     private String targetText="";
     private EditBox target;
-    private CycleButton<ReactorDesigner.Risk> riskButton;
-    private CycleButton<ReactorDesigner.CoolingMode> coolingButton;
-    private Button search,resize,applySafe,applyDanger;
     private boolean busy,attempted,allowResize;
     private long searchToken;
     private int left,top,panelWidth,coolingWidth;
@@ -89,12 +87,15 @@ final class AutoDesignScreen extends Screen {
             var rod=rods.get(i);
             int x=left+8+i*columnWidth;
             rodPositions.add(x);
-            var button=addRenderableWidget(Button.builder(rodToggle(rod),control -> {
+            var button=addRenderableWidget(new OritechButton(x+19,top+83,Math.max(24,columnWidth-21),18,
+                    rodToggle(rod), OritechTheme.ButtonStyle.GREEN, rod.block().getName(), control -> {
                 if (!allowed.remove(rod.id())) allowed.add(rod.id());
                 control.setMessage(rodToggle(rod));
+                ((OritechButton) control).setStyle(allowed.contains(rod.id())
+                        ? OritechTheme.ButtonStyle.GREEN : OritechTheme.ButtonStyle.DARK);
                 invalidateResult();
-            }).bounds(x+19,top+83,Math.max(24,columnWidth-21),18).build());
-            button.setTooltip(Tooltip.create(rod.block().getName()));
+            }));
+            button.setStyle(allowed.contains(rod.id()) ? OritechTheme.ButtonStyle.GREEN : OritechTheme.ButtonStyle.DARK);
             rodButtons.add(button);
         }
         coolingButton=addRenderableWidget(CycleButton.builder(AutoDesignScreen::coolingName,coolingMode)
@@ -105,18 +106,21 @@ final class AutoDesignScreen extends Screen {
                     invalidateResult();
                 }));
 
-        search=addRenderableWidget(Button.builder(tr("auto_search"),button -> search())
-                .bounds(left+8,top+108,104,18).build());
-        resize=addRenderableWidget(Button.builder(resizeLabel(),button -> {
-            allowResize=!allowResize;
-            button.setMessage(resizeLabel());
-            invalidateResult();
-        }).bounds(left+120,top+108,panelWidth-128,18)
-                .tooltip(Tooltip.create(tr("auto_resize_tip",ReactorDesigner.growthLimit(ClientRuntimeConfig.config().maxSize())))).build());
-        applySafe=addRenderableWidget(Button.builder(tr("auto_apply_safe"),button -> apply(result==null ? null : result.safe()))
-                .bounds(left+8,top+216,panelWidth/2-13,20).build());
-        applyDanger=addRenderableWidget(Button.builder(tr("auto_review_risky"),button -> confirmDanger())
-                .bounds(left+panelWidth/2+3,top+216,panelWidth/2-11,20).build());
+        search=addRenderableWidget(new OritechButton(left+8,top+108,104,18,tr("auto_search"),
+                OritechTheme.ButtonStyle.ORANGE, tr("auto_tip"), button -> search()));
+        resize=addRenderableWidget(new OritechButton(left+120,top+108,panelWidth-128,18,resizeLabel(),
+                OritechTheme.ButtonStyle.DARK, tr("auto_resize_tip",ReactorDesigner.growthLimit(ClientRuntimeConfig.config().maxSize())),
+                button -> {
+                    allowResize=!allowResize;
+                    button.setMessage(resizeLabel());
+                    ((OritechButton) button).setStyle(allowResize ? OritechTheme.ButtonStyle.GREEN : OritechTheme.ButtonStyle.DARK);
+                    invalidateResult();
+                }));
+        resize.setStyle(allowResize ? OritechTheme.ButtonStyle.GREEN : OritechTheme.ButtonStyle.DARK);
+        applySafe=addRenderableWidget(new OritechButton(left+8,top+216,panelWidth/2-13,20,tr("auto_apply_safe"),
+                OritechTheme.ButtonStyle.ORANGE, null, button -> apply(result==null ? null : result.safe())));
+        applyDanger=addRenderableWidget(new OritechButton(left+panelWidth/2+3,top+216,panelWidth/2-11,20,tr("auto_review_risky"),
+                OritechTheme.ButtonStyle.RED, null, button -> confirmDanger()));
         setInitialFocus(target);
         updateButtons();
     }
@@ -225,44 +229,45 @@ final class AutoDesignScreen extends Screen {
     @Override public boolean isPauseScreen() { return false; }
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float partialTick) {
-        graphics.fill(0,0,width,height,0xBF10151A);
-        graphics.fill(left,top,left+panelWidth,top+HEIGHT,0xFF22282F);
-        graphics.outline(left,top,panelWidth,HEIGHT,0xFF72808D);
-        line(graphics,title,8,8,panelWidth-16,LIGHT);
-        line(graphics,tr("auto_dimensions",WB.layout.width(),WB.layout.length(),WB.layout.height()),8,23,panelWidth-16,MUTED);
-        line(graphics,tr("auto_target"),8,35,panelWidth/2-15,LIGHT);
-        line(graphics,tr("auto_risk"),panelWidth/2,35,panelWidth/2-8,LIGHT);
-        line(graphics,tr("auto_rods"),8,71,panelWidth-24-coolingWidth,LIGHT);
-        line(graphics,tr("auto_cooling"),panelWidth-coolingWidth-8,71,coolingWidth,LIGHT);
+        graphics.fill(0,0,width,height,0xA8101216);
+        OritechTheme.panel(graphics,left,top,panelWidth,HEIGHT);
+        OritechTheme.headerBar(graphics,left+1,top+1,panelWidth-2,20);
+        line(graphics,title,8,6,panelWidth-16,OritechTheme.TEXT_LIGHT);
+        line(graphics,tr("auto_dimensions",WB.layout.width(),WB.layout.length(),WB.layout.height()),8,24,panelWidth-16,OritechTheme.TEXT_DARK_MUTED);
+        line(graphics,tr("auto_target"),8,36,panelWidth/2-15,OritechTheme.TEXT_DARK);
+        line(graphics,tr("auto_risk"),panelWidth/2,36,panelWidth/2-8,OritechTheme.TEXT_DARK);
+        line(graphics,tr("auto_rods"),8,71,panelWidth-24-coolingWidth,OritechTheme.TEXT_DARK);
+        line(graphics,tr("auto_cooling"),panelWidth-coolingWidth-8,71,coolingWidth,OritechTheme.TEXT_DARK);
         for (int i=0;i<rods.size();i++)
             graphics.fakeItem(new ItemStack(rods.get(i).block()),rodPositions.get(i),top+84);
 
+        OritechTheme.inset(graphics,left+6,top+129,panelWidth-12,83);
         if (busy) {
-            line(graphics,tr("auto_busy"),8,129,panelWidth-16,MUTED);
+            line(graphics,tr("auto_busy"),10,133,panelWidth-20,OritechTheme.TEXT_MUTED);
         } else if (allowed.isEmpty()) {
-            line(graphics,tr("auto_require_rods"),8,129,panelWidth-16,WARNING);
+            line(graphics,tr("auto_require_rods"),10,133,panelWidth-20,OritechTheme.STATUS_ALERT);
         } else if (targetText.isEmpty()) {
-            line(graphics,tr("auto_target_hint"),8,129,panelWidth-16,MUTED);
+            line(graphics,tr("auto_target_hint"),10,133,panelWidth-20,OritechTheme.TEXT_MUTED);
         }
         if (result!=null && result.safe()!=null) {
             var design=result.safe();
             long goal=completedRequest==null ? 0 : completedRequest.target();
             var summary=goal>0 && design.exportRate()<goal ? tr("auto_goal_missed",design.exportRate(),goal)
                     : tr("auto_safe_result",design.exportRate());
-            paragraph(graphics,summary,8,142,panelWidth-16,2,LIGHT);
+            paragraph(graphics,summary,10,145,panelWidth-20,2,OritechTheme.STATUS_OK);
             line(graphics,tr("auto_candidate_details",design.rodBlocks(),design.peakHeat(),design.layout().energyPorts()),
-                    8,162,panelWidth-16,MUTED);
+                    10,165,panelWidth-20,OritechTheme.TEXT_MUTED);
             var layout=design.layout();
             if (layout.width()!=WB.layout.width() || layout.length()!=WB.layout.length() || layout.height()!=WB.layout.height())
-                line(graphics,tr("auto_result_dimensions",layout.width(),layout.length(),layout.height()),8,173,panelWidth-16,LIGHT);
+                line(graphics,tr("auto_result_dimensions",layout.width(),layout.length(),layout.height()),10,176,panelWidth-20,OritechTheme.CYAN_BRIGHT);
             if (design.coolantPerSecond()>0)
                 line(graphics,tr("auto_coolant_rate",String.format(Locale.ROOT,"%.1f",design.coolantPerSecond())),
-                        8,184,panelWidth-16,MUTED);
+                        10,187,panelWidth-20,OritechTheme.TEXT_MUTED);
         } else if (attempted) {
-            paragraph(graphics,tr("auto_failed"),8,142,panelWidth-16,2,WARNING);
+            paragraph(graphics,tr("auto_failed"),10,145,panelWidth-20,2,OritechTheme.STATUS_ALERT);
         }
         if (result!=null && result.dangerous()!=null)
-            paragraph(graphics,dangerSummary(result.dangerous()),8,196,panelWidth-16,2,WARNING);
+            paragraph(graphics,dangerSummary(result.dangerous()),10,196,panelWidth-20,2,OritechTheme.STATUS_WARN);
         super.extractRenderState(graphics,mouseX,mouseY,partialTick);
     }
 

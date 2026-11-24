@@ -2,6 +2,8 @@
   "required": true,
   "minVersion": "0.8",
   "package": "com.justenoughoritech.mixin",
+  "compatibilityLevel": "JAVA_25",
   "client": ["KeyboardHandlerMixin"],
-  "injectors": {"defaultRequire": 1}
+  "injectors": {"defaultRequire": 1},
+  "overwrites": {"requireAnnotations": true}
 }

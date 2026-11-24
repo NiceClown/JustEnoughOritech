@@ -176,19 +176,87 @@ public final class ReactorLayout {
     }
 
     public List<Placement> placements(Rotation rotation, Mirror mirror) {
-        var base = placements();
-        if (rotation == Rotation.NONE && mirror == Mirror.NONE) return base;
-        // Preserve the build order across transforms so obstruction checks and printing agree.
-        return base.stream().map(block -> {
-            int mx = mirror == Mirror.FRONT_BACK ? width + 1 - block.x() : block.x();
-            int mz = mirror == Mirror.LEFT_RIGHT ? length + 1 - block.z() : block.z();
-            return switch (rotation) {
-                case CLOCKWISE_90 -> new Placement(length + 1 - mz, block.y(), mx, block.blockId());
-                case CLOCKWISE_180 -> new Placement(width + 1 - mx, block.y(), length + 1 - mz, block.blockId());
-                case COUNTERCLOCKWISE_90 -> new Placement(mz, block.y(), width + 1 - mx, block.blockId());
-                case NONE -> new Placement(mx, block.y(), mz, block.blockId());
-            };
-        }).toList();
+        return emitPlacements(-1, true, true, 1, rotation, mirror);
+    }
+
+    public List<Placement> shellPlacements(Rotation rotation, Mirror mirror) {
+        return emitPlacements(-1, true, false, 1, rotation, mirror);
+    }
+
+    public List<Placement> layerPlacements(int layer, Rotation rotation, Mirror mirror) {
+        return layer < 0 ? List.of() : emitPlacements(layer, true, true, 1, rotation, mirror);
+    }
+
+    public List<Placement> heatmapCutawayPlacements(Rotation rotation, Mirror mirror) {
+        return heatmapCutawayPlacements(rotation, mirror, 1);
+    }
+
+    public List<Placement> heatmapCutawayPlacements(Rotation rotation, Mirror mirror, int yStep) {
+        return emitPlacements(-1, false, true, Math.max(1, yStep), rotation, mirror);
+    }
+
+    private List<Placement> emitPlacements(int layerOnly, boolean includeWalls, boolean includeInterior,
+                                           int yStep, Rotation rotation, Mirror mirror) {
+        Rotation rot = rotation == null ? Rotation.NONE : rotation;
+        Mirror mir = mirror == null ? Mirror.NONE : mirror;
+        var blocks = new java.util.ArrayList<Placement>();
+        int ports = energyPorts;
+        int maxY = layerOnly >= 0 ? Math.min(height + 1, layerOnly) : height + 1;
+        for (int y = 0; y <= maxY; y++) {
+            boolean emitY = layerOnly < 0 || y == layerOnly;
+            if (!emitY && y == 0) continue;
+            boolean insideY = y > 0 && y <= height;
+            boolean sampleInteriorY = yStep <= 1 || y == 1 || y == height || ((y - 1) % yStep == 0);
+            boolean wantInteriorY = includeInterior && emitY && sampleInteriorY;
+            for (int z = 0; z <= length + 1; z++) {
+                boolean insideZ = z > 0 && z <= length;
+                for (int x = 0; x <= width + 1; x++) {
+                    boolean insideX = x > 0 && x <= width;
+                    if (insideX && insideZ && insideY && !wantInteriorY) {
+                        x = width;
+                        continue;
+                    }
+                    String id = WALL;
+                    boolean emitBlock;
+                    if (insideX && insideZ && insideY) {
+                        var part = get(x - 1, z - 1);
+                        if (part.kind() == ReactorParts.Kind.EMPTY) continue;
+                        id = part.id();
+                        emitBlock = wantInteriorY;
+                    } else if (insideX && insideZ && y == height + 1) {
+                        id = switch (get(x - 1, z - 1).kind()) {
+                            case ROD -> FUEL_PORT;
+                            case ABSORBER -> COOLANT_PORT;
+                            default -> WALL;
+                        };
+                        emitBlock = emitY && (includeWalls || !WALL.equals(id));
+                    } else if (insideY && (insideX != insideZ)) {
+                        if (x == 0 && y == 1 && z == 1) id = CONTROLLER;
+                        else if (ports > 0) {
+                            id = ENERGY_PORT;
+                            ports--;
+                        }
+                        emitBlock = emitY && (includeWalls || !WALL.equals(id));
+                    } else {
+                        emitBlock = emitY && (includeWalls || y == 0);
+                    }
+                    if (emitBlock) blocks.add(transform(new Placement(x, y, z, id), rot, mir));
+                }
+            }
+        }
+        return List.copyOf(blocks);
+    }
+
+    private Placement transform(Placement block, Rotation rotation, Mirror mirror) {
+        if (rotation == Rotation.NONE && mirror == Mirror.NONE) return block;
+        int mx = mirror == Mirror.FRONT_BACK ? width + 1 - block.x() : block.x();
+        int mz = mirror == Mirror.LEFT_RIGHT ? length + 1 - block.z() : block.z();
+        return switch (rotation) {
+            case CLOCKWISE_90 -> new Placement(length + 1 - mz, block.y(), mx, block.blockId());
+            case CLOCKWISE_180 -> new Placement(width + 1 - mx, block.y(), length + 1 - mz, block.blockId());
+            case COUNTERCLOCKWISE_90 -> new Placement(mz, block.y(), width + 1 - mx, block.blockId());
+            case NONE -> new Placement(mx, block.y(), mz, block.blockId());
+        };
     }
 
     public static boolean onShell(Placement block,int width,int height,int length) {
@@ -203,37 +271,7 @@ public final class ReactorLayout {
 
     /** The origin is the outside bottom corner with the smallest X and Z. */
     public List<Placement> placements() {
-        var blocks = new java.util.ArrayList<Placement>();
-        int ports = energyPorts;
-        for (int y = 0; y <= height + 1; y++) {
-            for (int z = 0; z <= length + 1; z++) {
-                for (int x = 0; x <= width + 1; x++) {
-                    boolean insideX = x > 0 && x <= width;
-                    boolean insideZ = z > 0 && z <= length;
-                    boolean insideY = y > 0 && y <= height;
-                    String id = WALL;
-                    if (insideX && insideZ && insideY) {
-                        var part = get(x - 1, z - 1);
-                        if (part.kind() == ReactorParts.Kind.EMPTY) continue;
-                        id = part.id();
-                    } else if (insideX && insideZ && y == height + 1) {
-                        id = switch (get(x - 1, z - 1).kind()) {
-                            case ROD -> FUEL_PORT;
-                            case ABSORBER -> COOLANT_PORT;
-                            default -> WALL;
-                        };
-                    } else if (insideY && (insideX != insideZ)) {
-                        if (x == 0 && y == 1 && z == 1) id = CONTROLLER;
-                        else if (ports > 0) {
-                            id = ENERGY_PORT;
-                            ports--;
-                        }
-                    }
-                    blocks.add(new Placement(x, y, z, id));
-                }
-            }
-        }
-        return List.copyOf(blocks);
+        return emitPlacements(-1, true, true, 1, Rotation.NONE, Mirror.NONE);
     }
 
     public void clear() { Arrays.fill(cells, ReactorParts.Part.EMPTY); }
@@ -269,8 +307,8 @@ public final class ReactorLayout {
             }
         }
         int outerW=width+2, outerL=length+2, outerH=height+2;
-        int shell=outerW*outerL*outerH-width*length*height;
-        int walls=Math.max(0,shell-ceilingPorts-1-energyPorts);
+        long shell=(long)outerW*outerL*outerH-(long)width*length*height;
+        int walls=(int)Math.min(Integer.MAX_VALUE,Math.max(0L,shell-ceilingPorts-1L-energyPorts));
         counts.merge("oritech:reactor_wall",walls,Integer::sum);
         counts.merge("oritech:nuclear_reactor_controller",1,Integer::sum);
         counts.merge("oritech:reactor_energy_port",energyPorts,Integer::sum);

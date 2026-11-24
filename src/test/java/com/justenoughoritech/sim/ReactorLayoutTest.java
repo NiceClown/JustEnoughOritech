@@ -489,4 +489,39 @@ class ReactorLayoutTest {
             }
         }
     }
+
+    @Test
+    void specializedPreviewPlacementsMatchFilteredFullPlacementsAcrossOrientations() {
+        var layout = new ReactorLayout();
+        layout.resize(4, 3, 64);
+        layout.setHeight(3, 64);
+        layout.setEnergyPorts(4);
+        layout.set(0, 0, SINGLE);
+        layout.set(1, 1, ABSORBER);
+        layout.set(3, 2, VENT);
+
+        for (Rotation rot : Rotation.values()) {
+            for (Mirror mir : Mirror.values()) {
+                var full = layout.placements(rot, mir);
+                int bw = layout.buildWidth(rot);
+                int bl = layout.buildLength(rot);
+
+                var expectedShell = full.stream()
+                        .filter(p -> ReactorLayout.onShell(p, bw, layout.height(), bl))
+                        .toList();
+                assertEquals(expectedShell, layout.shellPlacements(rot, mir));
+
+                for (int layer = 0; layer <= layout.height() + 1; layer++) {
+                    int targetY = layer;
+                    var expectedLayer = full.stream().filter(p -> p.y() == targetY).toList();
+                    assertEquals(expectedLayer, layout.layerPlacements(layer, rot, mir));
+                }
+
+                var expectedHeatmap = full.stream()
+                        .filter(p -> !ReactorLayout.WALL.equals(p.blockId()) || p.y() == 0)
+                        .toList();
+                assertEquals(expectedHeatmap, layout.heatmapCutawayPlacements(rot, mir));
+            }
+        }
+    }
 }

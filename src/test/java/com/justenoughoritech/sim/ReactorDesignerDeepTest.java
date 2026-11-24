@@ -85,12 +85,15 @@ class ReactorDesignerDeepTest {
     }
 
     @Test
-    void growthLimitCapsAtOritechMaxInterior64() {
+    void growthLimitHonorsServerMaxUpTo256() {
         assertEquals(64, ReactorDesigner.growthLimit(64));
-        assertEquals(64, ReactorDesigner.growthLimit(66));
-        assertEquals(64, ReactorDesigner.growthLimit(100));
+        assertEquals(66, ReactorDesigner.growthLimit(66));
+        assertEquals(100, ReactorDesigner.growthLimit(100));
+        assertEquals(256, ReactorDesigner.growthLimit(256));
+        assertEquals(256, ReactorDesigner.growthLimit(300));
         assertEquals(14, ReactorDesigner.growthLimit(14));
         assertEquals(1, ReactorDesigner.growthLimit(1));
+        assertEquals(1, ReactorDesigner.growthLimit(0));
     }
 
     @Test

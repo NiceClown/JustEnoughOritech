@@ -6,7 +6,7 @@
     "east": "just_enough_oritech:block/reactor_printer_side",
     "west": "just_enough_oritech:block/reactor_printer_side",
     "up": "just_enough_oritech:block/reactor_printer_top",
-    "down": "just_enough_oritech:block/reactor_printer_side",
+    "down": "just_enough_oritech:block/reactor_printer_bottom",
     "particle": "just_enough_oritech:block/reactor_printer_side"
   }
 }

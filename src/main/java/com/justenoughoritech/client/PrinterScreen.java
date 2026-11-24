@@ -1,5 +1,6 @@
 package com.justenoughoritech.client;
 
+import com.justenoughoritech.compat.jei.JEIPlugin;
 import com.justenoughoritech.printer.BlueprintData;
 import com.justenoughoritech.printer.PrinterContent;
 import com.justenoughoritech.printer.PrinterControlRequest;
@@ -9,14 +10,11 @@ import com.justenoughoritech.printer.PrinterReport;
 import com.justenoughoritech.sim.ReactorLayout;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Mirror;
@@ -25,30 +23,30 @@ import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import static com.justenoughoritech.client.SimulatorWidget.tr;
 
+/** Oritech-styled 3D Reactor Printer screen with full placement controls, redstone/dismantle modes, and JEI lookup. */
 final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
-    private static final int MODEL_X = 180, MODEL_Y = 22, MODEL_W = 152, MODEL_H = 92;
-    private static final int MATERIALS_X = MODEL_X, MATERIALS_Y = 160, MATERIALS_W = MODEL_W, ROWS = 6;
-    private static final int HELP_X = 320, HELP_Y = 6, HELP_SIZE = 12;
-    private static final int TEXT = 0xFFF3F6F9, RED = 0xFFFF8176, MUTED = 0xFFB8C4D0, OK = 0xFF89D39D;
+    private static final int MODEL_X = 186, MODEL_Y = 24, MODEL_W = 154, MODEL_H = 102;
+    private static final int MATERIALS_X = MODEL_X, MATERIALS_Y = 178, MATERIALS_W = MODEL_W, ROWS = 6;
+    private static final int HELP_X = 328, HELP_Y = 4, HELP_SIZE = 12;
     private static final Direction[] FACE_ORDER = {
             Direction.UP, Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST, Direction.DOWN
     };
-    private static final Identifier SLOT_SPRITE = Identifier.withDefaultNamespace("container/slot");
 
     private final TextViewport textViewport = new TextViewport();
     private final List<TipArea> tips = new ArrayList<>();
-    private final Button[] moveButtons = new Button[6];
-    private Button facePrev, faceNext, rotLeft, rotRight, flipX, flipZ, resetBtn, previewBtn, aimBtn;
+    private final OritechButton[] moveButtons = new OritechButton[6];
+    private OritechButton facePrev, faceNext, rotLeft, rotRight, flipX, flipZ, resetBtn;
+    private OritechButton redstoneBtn, modeBtn, previewBtn, aimBtn;
     private int offset;
     private ReactorLayout previewLayout;
     private Rotation previewRot;
     private Mirror previewMirror;
     private List<ReactorLayout.Placement> shell = List.of();
-    private float pitch = AssemblyPreview.DEFAULT_PITCH, yaw = AssemblyPreview.DEFAULT_YAW;
+    private final org.joml.Quaternionf orientation = AssemblyPreview.defaultOrientation();
+    private float zoom = 1.0f;
     private boolean rotating;
 
     private record TipArea(int x, int y, int w, int h, Component tip, boolean stepHint) {
@@ -58,7 +56,7 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
     }
 
     PrinterScreen(PrinterMenu menu, Inventory inventory, Component title) {
-        super(menu, inventory, title, 340, 244);
+        super(menu, inventory, title, 348, 264);
     }
 
     @Override
@@ -67,47 +65,52 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
         rotating = false;
         tips.clear();
 
-        facePrev = addBtn(8, 48, 16, 15, Component.literal("<"), tr("printer_tip.face"), false,
+        facePrev = addBtn(9, 61, 16, 15, Component.literal("<"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.face"), false,
                 () -> sendControl(PrinterControlRequest.setFace(menu.blockPos(), cycleFace(-1))));
-        faceNext = addBtn(154, 48, 16, 15, Component.literal(">"), tr("printer_tip.face"), false,
+        faceNext = addBtn(163, 61, 16, 15, Component.literal(">"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.face"), false,
                 () -> sendControl(PrinterControlRequest.setFace(menu.blockPos(), cycleFace(1))));
 
-        rotLeft = addBtn(8, 66, 38, 15, Component.literal("↺ 90"), tr("printer_tip.rotate_ccw"), false,
+        rotLeft = addBtn(9, 79, 41, 15, Component.literal("↺ 90"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.rotate_ccw"), false,
                 () -> sendControl(PrinterControlRequest.rotate(menu.blockPos(), -1)));
-        rotRight = addBtn(49, 66, 38, 15, Component.literal("↻ 90"), tr("printer_tip.rotate_cw"), false,
+        rotRight = addBtn(52, 79, 41, 15, Component.literal("↻ 90"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.rotate_cw"), false,
                 () -> sendControl(PrinterControlRequest.rotate(menu.blockPos(), 1)));
-        flipX = addBtn(90, 66, 39, 15, tr("printer_flip_x"), tr("printer_tip.flip_x"), false,
+        flipX = addBtn(95, 79, 41, 15, tr("printer_flip_x"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.flip_x"), false,
                 () -> sendControl(PrinterControlRequest.simple(menu.blockPos(), PrinterControlRequest.Action.FLIP_X)));
-        flipZ = addBtn(132, 66, 38, 15, tr("printer_flip_z"), tr("printer_tip.flip_z"), false,
+        flipZ = addBtn(138, 79, 41, 15, tr("printer_flip_z"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.flip_z"), false,
                 () -> sendControl(PrinterControlRequest.simple(menu.blockPos(), PrinterControlRequest.Action.FLIP_Z)));
 
-        moveButtons[0] = addBtn(47, 84, 19, 15, Component.literal("-"), tr("printer_tip.move_x"), true,
+        moveButtons[0] = addBtn(47, 97, 19, 15, Component.literal("-"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.move_x"), true,
                 () -> sendMove(-1, 0, 0));
-        moveButtons[1] = addBtn(68, 84, 19, 15, Component.literal("+"), tr("printer_tip.move_x"), true,
+        moveButtons[1] = addBtn(68, 97, 19, 15, Component.literal("+"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.move_x"), true,
                 () -> sendMove(1, 0, 0));
-        moveButtons[2] = addBtn(130, 84, 19, 15, Component.literal("-"), tr("printer_tip.move_y"), true,
+        moveButtons[2] = addBtn(131, 97, 19, 15, Component.literal("-"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.move_y"), true,
                 () -> sendMove(0, -1, 0));
-        moveButtons[3] = addBtn(151, 84, 19, 15, Component.literal("+"), tr("printer_tip.move_y"), true,
+        moveButtons[3] = addBtn(152, 97, 19, 15, Component.literal("+"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.move_y"), true,
                 () -> sendMove(0, 1, 0));
-        moveButtons[4] = addBtn(47, 102, 19, 15, Component.literal("-"), tr("printer_tip.move_z"), true,
+        moveButtons[4] = addBtn(47, 115, 19, 15, Component.literal("-"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.move_z"), true,
                 () -> sendMove(0, 0, -1));
-        moveButtons[5] = addBtn(68, 102, 19, 15, Component.literal("+"), tr("printer_tip.move_z"), true,
+        moveButtons[5] = addBtn(68, 115, 19, 15, Component.literal("+"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.move_z"), true,
                 () -> sendMove(0, 0, 1));
 
-        resetBtn = addBtn(91, 102, 79, 15, tr("printer_reset_pos"), tr("printer_tip.reset"), false, () -> {
+        resetBtn = addBtn(94, 115, 85, 15, tr("printer_reset_pos"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.reset"), false, () -> {
             var action = menu.started()
                     ? PrinterControlRequest.Action.RESET_PROGRESS
                     : PrinterControlRequest.Action.RESET_POSITION;
             sendControl(PrinterControlRequest.simple(menu.blockPos(), action));
         });
 
-        previewBtn = addBtn(8, 121, 80, 17, tr("printer_preview_short"), tr("printer_tip.preview"), false, () -> {
+        redstoneBtn = addBtn(9, 133, 83, 15, tr("printer_rs.high"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.redstone"), false,
+                () -> sendControl(PrinterControlRequest.simple(menu.blockPos(), PrinterControlRequest.Action.CYCLE_REDSTONE)));
+        modeBtn = addBtn(94, 133, 85, 15, tr("printer_mode.build"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.mode"), false,
+                () -> sendControl(PrinterControlRequest.simple(menu.blockPos(), PrinterControlRequest.Action.TOGGLE_MODE)));
+
+        previewBtn = addBtn(9, 151, 83, 16, tr("printer_preview_short"), OritechTheme.ButtonStyle.DARK, tr("printer_tip.preview"), false, () -> {
             var printer = menu.printer();
             if (printer != null && printer.layout() != null) {
                 ProjectionController.togglePrinterPreview(printer);
             }
         });
-        aimBtn = addBtn(91, 121, 79, 17, tr("printer_aim"), tr("printer_tip.aim"), false, () -> {
+        aimBtn = addBtn(94, 151, 85, 16, tr("printer_aim"), OritechTheme.ButtonStyle.ORANGE, tr("printer_tip.aim"), false, () -> {
             var printer = menu.printer();
             if (printer != null && printer.layout() != null) {
                 onClose();
@@ -117,10 +120,10 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
         updateButtonStates();
     }
 
-    private Button addBtn(int x, int y, int w, int h, Component label, Component tip, boolean stepHint, Runnable action) {
+    private OritechButton addBtn(int x, int y, int w, int h, Component label, OritechTheme.ButtonStyle style,
+                                 Component tip, boolean stepHint, Runnable action) {
         tips.add(new TipArea(x, y, w, h, tip, stepHint));
-        return addRenderableWidget(Button.builder(label, b -> action.run())
-                .bounds(leftPos + x, topPos + y, w, h).build());
+        return addRenderableWidget(new OritechButton(leftPos + x, topPos + y, w, h, label, style, null, b -> action.run()));
     }
 
     private Direction cycleFace(int delta) {
@@ -164,71 +167,114 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
         flipZ.active = edit;
         for (var button : moveButtons) button.active = edit;
         aimBtn.active = edit;
-        resetBtn.active = menu.canCancel();
+
+        boolean canControl = menu.canCancel();
+        resetBtn.active = canControl;
         resetBtn.setMessage(tr(menu.started() ? "printer_restart" : "printer_reset_pos"));
+        resetBtn.setStyle(menu.started() ? OritechTheme.ButtonStyle.RED : OritechTheme.ButtonStyle.DARK);
+
+        var rs = menu.redstoneMode();
+        redstoneBtn.active = canControl;
+        redstoneBtn.setMessage(tr("printer_rs." + switch (rs) {
+            case LOW -> "low";
+            case ALWAYS -> "always";
+            case HIGH -> "high";
+        }));
+        redstoneBtn.setStyle(rs == PrinterControlRequest.RedstoneMode.ALWAYS
+                ? OritechTheme.ButtonStyle.GREEN
+                : rs == PrinterControlRequest.RedstoneMode.LOW ? OritechTheme.ButtonStyle.ORANGE : OritechTheme.ButtonStyle.DARK);
+
+        var mode = menu.operationMode();
+        modeBtn.active = canControl;
+        boolean deconstruct = mode == PrinterControlRequest.OperationMode.DECONSTRUCT;
+        modeBtn.setMessage(tr("printer_mode." + (deconstruct ? "deconstruct" : "build")));
+        modeBtn.setStyle(deconstruct ? OritechTheme.ButtonStyle.RED : OritechTheme.ButtonStyle.DARK);
+
         var printer = menu.printer();
         boolean hasLayout = printer != null && printer.layout() != null;
+        boolean previewing = ProjectionController.isPreviewingPrinter(printer);
         previewBtn.active = hasLayout;
-        previewBtn.setMessage(tr(ProjectionController.isPreviewingPrinter(printer)
-                ? "printer_preview_hide" : "printer_preview_short"));
+        previewBtn.setMessage(tr(previewing ? "printer_preview_hide" : "printer_preview_short"));
+        previewBtn.setStyle(previewing ? OritechTheme.ButtonStyle.GREEN : OritechTheme.ButtonStyle.DARK);
     }
 
     @Override
     public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(leftPos, topPos, leftPos + imageWidth, topPos + imageHeight, 0xFF293039);
-        graphics.outline(leftPos, topPos, imageWidth, imageHeight, 0xFF768494);
-        graphics.fill(leftPos + 175, topPos + 6, leftPos + 176, topPos + imageHeight - 6, 0xFF3E4A56);
+        OritechTheme.panel(graphics, leftPos, topPos, imageWidth, imageHeight);
+        OritechTheme.headerBar(graphics, leftPos + 1, topPos + 1, imageWidth - 2, 19);
+        graphics.fill(leftPos + 182, topPos + 21, leftPos + 183, topPos + imageHeight - 4, 0xFF8B8E94);
+
         for (var slot : menu.slots) {
-            graphics.blitSprite(RenderPipelines.GUI_TEXTURED, SLOT_SPRITE,
-                    leftPos + slot.x - 1, topPos + slot.y - 1, 18, 18);
+            OritechTheme.slot(graphics, leftPos + slot.x - 1, topPos + slot.y - 1);
         }
         if (!menu.getSlot(0).hasItem()) {
             var slot = menu.getSlot(0);
             graphics.fakeItem(new ItemStack(PrinterContent.BLUEPRINT.get()), leftPos + slot.x, topPos + slot.y);
-            graphics.fill(leftPos + slot.x, topPos + slot.y, leftPos + slot.x + 16, topPos + slot.y + 16, 0xB8232930);
+            graphics.fill(leftPos + slot.x, topPos + slot.y, leftPos + slot.x + 16, topPos + slot.y + 16, 0xA0252A30);
         }
-        graphics.fill(leftPos + 26, topPos + 48, leftPos + 152, topPos + 63, 0xFF1B2127);
-        graphics.outline(leftPos + 26, topPos + 48, 126, 15, 0xFF44515D);
+
+        // Attach side inset well
+        OritechTheme.inset(graphics, leftPos + 27, topPos + 61, 134, 15);
     }
 
     @Override
     protected void extractLabels(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-        line(graphics, title, 8, 7, 162, TEXT);
-        line(graphics, tr("printer_model"), MODEL_X, 7, HELP_X - MODEL_X - 4, TEXT);
-        graphics.outline(HELP_X, HELP_Y, HELP_SIZE, HELP_SIZE, 0xFF8594A4);
-        line(graphics, Component.literal("?"), HELP_X + 3, HELP_Y + 2, 8, TEXT);
+        var printer = menu.printer();
+        String bpName = printer == null ? "" : printer.blueprintName();
+        line(graphics, title, 8, 6, 170, OritechTheme.TEXT_LIGHT);
+        Component modelHeader = bpName.isBlank() ? tr("printer_model") : Component.literal(bpName);
+        line(graphics, modelHeader, MODEL_X, 6, HELP_X - MODEL_X - 4,
+                bpName.isBlank() ? OritechTheme.TEXT_LIGHT : OritechTheme.ORANGE_BRIGHT);
+
+        OritechTheme.button(graphics, HELP_X, HELP_Y, HELP_SIZE, HELP_SIZE, OritechTheme.ButtonStyle.DARK, false, true);
+        line(graphics, Component.literal("?"), HELP_X + 3, HELP_Y + 2, 8, OritechTheme.TEXT_LIGHT);
 
         int state = menu.state();
-        int stateColor = state == 5 ? OK : (state == 3 || state == 4 || state == 6) ? RED : TEXT;
-        line(graphics, tr("printer_state." + state), 30, 24, 140, stateColor);
+        int stateColor = state == 5 ? OritechTheme.STATUS_OK_DARK
+                : (state == 3 || state == 4 || state == 6 || state == 7) ? OritechTheme.STATUS_ALERT_DARK
+                : OritechTheme.TEXT_DARK;
+        line(graphics, tr("printer_state." + state), 31, 25, 148, stateColor);
 
-        var printer = menu.printer();
         if (printer != null && printer.layout() != null) {
             var layout = printer.layout();
             line(graphics, tr("printer_summary", layout.width(), layout.length(), layout.height(), printer.placements().size()),
-                    30, 35, 140, MUTED);
+                    31, 35, 148, OritechTheme.TEXT_DARK_MUTED);
         } else {
-            line(graphics, tr("printer_insert_bp"), 30, 35, 140, MUTED);
+            line(graphics, tr("printer_insert_bp"), 31, 35, 148, OritechTheme.TEXT_DARK_MUTED);
         }
+
+        int total = menu.totalPlacements();
+        int done = menu.progress();
+        float ratio = menu.hasJob() && total > 0 ? Math.clamp(done / (float) total, 0f, 1f) : 0f;
+        int barColor = state == 5 ? 0xFF3C8527
+                : menu.operationMode() == PrinterControlRequest.OperationMode.DECONSTRUCT
+                ? OritechTheme.ORANGE_BRIGHT : OritechTheme.CYAN_DEEP;
+        OritechTheme.progressBar(graphics, 9, 47, 170, 11, ratio, barColor);
+        Component progressText = menu.hasJob() && total > 0
+                ? Component.literal(done + " / " + total + " (" + Math.round(ratio * 100f) + "%)")
+                : Component.literal("0 / 0");
+        textViewport.line(graphics, font, progressText, 12, 49, 164, OritechTheme.TEXT_LIGHT, true);
 
         Component faceLabel = !menu.hasJob()
                 ? Component.literal("—")
                 : menu.anchored()
                 ? tr("printer_face_anchored")
                 : tr("printer_face_value", tr("face." + menu.attachFace().getName()));
-        line(graphics, faceLabel, 30, 52, 118, menu.anchored() ? OK : TEXT);
+        line(graphics, faceLabel, 31, 65, 126, menu.anchored() ? OritechTheme.STATUS_OK : OritechTheme.TEXT_LIGHT);
 
-        line(graphics, Component.literal("X:" + menu.offset(0)), 10, 88, 35, TEXT);
-        line(graphics, Component.literal("Y:" + menu.offset(1)), 93, 88, 35, TEXT);
-        line(graphics, Component.literal("Z:" + menu.offset(2)), 10, 106, 35, TEXT);
-        line(graphics, playerInventoryTitle, 8, 148, 162, MUTED);
+        line(graphics, Component.literal("X: " + menu.offset(0)), 10, 101, 36, OritechTheme.TEXT_DARK);
+        line(graphics, Component.literal("Y: " + menu.offset(1)), 94, 101, 36, OritechTheme.TEXT_DARK);
+        line(graphics, Component.literal("Z: " + menu.offset(2)), 10, 119, 36, OritechTheme.TEXT_DARK);
+        line(graphics, playerInventoryTitle, 12, 170, 162, OritechTheme.TEXT_DARK_MUTED);
 
         drawModel(graphics, printer);
         if (printer != null && printer.layout() != null) {
-            drawPositionAndReport(graphics, printer);
+            drawPositionAndReport(graphics, printer, mouseX, mouseY);
         } else {
-            line(graphics, tr("printer_materials_heading"), MATERIALS_X, 148, MATERIALS_W, TEXT);
-            textViewport.paragraph(graphics, font, tr("printer_no_job_hint"), MATERIALS_X, MATERIALS_Y, MATERIALS_W, 4, MUTED);
+            line(graphics, tr("printer_materials_heading"), MATERIALS_X, 166, MATERIALS_W, OritechTheme.TEXT_DARK);
+            OritechTheme.inset(graphics, MATERIALS_X, MATERIALS_Y, MATERIALS_W, ROWS * 12 + 4);
+            textViewport.paragraph(graphics, font, tr("printer_no_job_hint"), MATERIALS_X + 6, MATERIALS_Y + 6,
+                    MATERIALS_W - 12, 5, OritechTheme.TEXT_MUTED);
         }
     }
 
@@ -240,7 +286,7 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
             graphics.setComponentTooltipForNextFrame(font, PrinterContent.instructions(), mouseX, mouseY);
             return;
         }
-        if (x >= 8 && x < 26 && y >= 24 && y < 42 && !menu.getSlot(0).hasItem()) {
+        if (x >= 9 && x < 27 && y >= 25 && y < 43 && !menu.getSlot(0).hasItem()) {
             graphics.setTooltipForNextFrame(font, tr("printer_slot_tip"), mouseX, mouseY);
             return;
         }
@@ -253,21 +299,31 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
                 return;
             }
         }
+        int hoveredRow = hoveredMissingRow(mouseX, mouseY);
+        if (hoveredRow >= 0) {
+            var entry = missing().get(offset + hoveredRow);
+            var itemName = new ItemStack(BuiltInRegistries.ITEM.getValue(entry.item())).getHoverName();
+            graphics.setComponentTooltipForNextFrame(font, List.of(
+                    itemName,
+                    tr("printer_jei_lookup").copy().withStyle(net.minecraft.ChatFormatting.GOLD)
+            ), mouseX, mouseY);
+            return;
+        }
         if (!rotating && overModel(mouseX, mouseY) && previewLayout != null) {
             graphics.setTooltipForNextFrame(font, tr("printer_model_drag"), mouseX, mouseY);
         }
     }
 
     private void drawModel(GuiGraphicsExtractor graphics, PrinterEntity printer) {
-        graphics.fill(MODEL_X, MODEL_Y, MODEL_X + MODEL_W, MODEL_Y + MODEL_H, 0xFF1B2127);
-        graphics.outline(MODEL_X, MODEL_Y, MODEL_W, MODEL_H, 0xFF44515D);
+        OritechTheme.inset(graphics, MODEL_X, MODEL_Y, MODEL_W, MODEL_H);
         var layout = printer == null ? null : printer.layout();
         if (layout == null) {
             previewLayout = null;
             previewRot = null;
             previewMirror = null;
             shell = List.of();
-            textViewport.paragraph(graphics, font, tr("printer_model_empty"), MODEL_X + 6, MODEL_Y + 14, MODEL_W - 12, 4, MUTED);
+            textViewport.paragraph(graphics, font, tr("printer_model_empty"), MODEL_X + 6, MODEL_Y + 14,
+                    MODEL_W - 12, 4, OritechTheme.TEXT_MUTED);
             return;
         }
         var rot = menu.rotation();
@@ -277,68 +333,94 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
             previewLayout = layout;
             previewRot = rot;
             previewMirror = mir;
-            shell = AssemblyPreview.shell(layout.placements(rot, mir), width, height, length);
+            shell = layout.shellPlacements(rot, mir);
         }
         AssemblyPreview.draw(graphics, shell, width, height, length, -1, null, null,
-                pitch, yaw, MODEL_X, MODEL_Y, MODEL_W, MODEL_H - 12);
+                orientation, zoom, MODEL_X + 1, MODEL_Y + 1, MODEL_W - 2, MODEL_H - 14, false);
         var facing = layout.controllerFacing(rot, mir);
         Component badge = tr(mir == Mirror.NONE ? "printer_orient_badge" : "printer_orient_mirrored",
                 BlueprintData.rotationDegrees(rot), tr("face." + facing.getName()));
-        line(graphics, badge, MODEL_X + 4, MODEL_Y + MODEL_H - 11, MODEL_W - 8, MUTED);
+        line(graphics, badge, MODEL_X + 4, MODEL_Y + MODEL_H - 11, MODEL_W - 8, OritechTheme.CYAN_BRIGHT);
     }
 
-    private void drawPositionAndReport(GuiGraphicsExtractor graphics, PrinterEntity printer) {
+    private void drawPositionAndReport(GuiGraphicsExtractor graphics, PrinterEntity printer, int mouseX, int mouseY) {
         var anchor = printer.anchor();
         if (anchor != null) {
-            line(graphics, tr("printer_origin", anchor.getX(), anchor.getY(), anchor.getZ()), 180, 118, MODEL_W, TEXT);
+            line(graphics, tr("printer_origin", anchor.getX(), anchor.getY(), anchor.getZ()),
+                    MODEL_X, 130, MODEL_W, OritechTheme.TEXT_DARK);
         }
         var report = printer.report();
+        if (menu.operationMode() == PrinterControlRequest.OperationMode.DECONSTRUCT) {
+            textViewport.paragraph(graphics, font, tr("printer_dismantle_hint"), MODEL_X, 141, MODEL_W, 2, OritechTheme.ORANGE_DEEP);
+            line(graphics, tr("printer_materials_heading"), MATERIALS_X, 166, MATERIALS_W, OritechTheme.TEXT_DARK);
+            OritechTheme.inset(graphics, MATERIALS_X, MATERIALS_Y, MATERIALS_W, ROWS * 12 + 4);
+            textViewport.paragraph(graphics, font, tr("printer_dismantle_storage"), MATERIALS_X + 6, MATERIALS_Y + 6,
+                    MATERIALS_W - 12, 4, OritechTheme.TEXT_MUTED);
+            return;
+        }
         if (report == null) {
-            line(graphics, tr("printer_checking"), 180, 129, MODEL_W, MUTED);
+            line(graphics, tr("printer_checking"), MODEL_X, 141, MODEL_W, OritechTheme.TEXT_DARK_MUTED);
             line(graphics, tr(menu.creativeJob() ? "printer_materials_heading" : "printer_missing_title"),
-                    MATERIALS_X, 148, MATERIALS_W, TEXT);
+                    MATERIALS_X, 166, MATERIALS_W, OritechTheme.TEXT_DARK);
+            OritechTheme.inset(graphics, MATERIALS_X, MATERIALS_Y, MATERIALS_W, ROWS * 12 + 4);
             return;
         }
         var blocked = report.obstruction();
         if (blocked != null) {
             textViewport.paragraph(graphics, font, tr("printer_obstruction", blocked.getX(), blocked.getY(), blocked.getZ()),
-                    180, 129, MODEL_W, 2, RED);
+                    MODEL_X, 141, MODEL_W, 2, OritechTheme.STATUS_ALERT_DARK);
         } else {
-            line(graphics, tr(report.unloaded() ? "printer_partial" : "printer_clear"), 180, 129, MODEL_W, OK);
+            line(graphics, tr(report.unloaded() ? "printer_partial" : "printer_clear"),
+                    MODEL_X, 141, MODEL_W, OritechTheme.STATUS_OK_DARK);
         }
         line(graphics, tr(menu.creativeJob() ? "printer_materials_heading"
                         : report.unloaded() ? "printer_missing_estimate" : "printer_missing_title"),
-                MATERIALS_X, 148, MATERIALS_W, TEXT);
+                MATERIALS_X, 166, MATERIALS_W, OritechTheme.TEXT_DARK);
 
+        OritechTheme.inset(graphics, MATERIALS_X, MATERIALS_Y, MATERIALS_W, ROWS * 12 + 4);
         var missing = report.missing();
         if (menu.creativeJob()) {
-            textViewport.paragraph(graphics, font, tr("printer_free_creative"), MATERIALS_X, MATERIALS_Y, MATERIALS_W, 3, MUTED);
+            textViewport.paragraph(graphics, font, tr("printer_free_creative"), MATERIALS_X + 6, MATERIALS_Y + 6,
+                    MATERIALS_W - 12, 3, OritechTheme.TEXT_MUTED);
             return;
         }
         if (missing.isEmpty()) {
             textViewport.paragraph(graphics, font, tr(report.unloaded() ? "printer_check_loaded" : "printer_materials_ready"),
-                    MATERIALS_X, MATERIALS_Y, MATERIALS_W, 3, OK);
+                    MATERIALS_X + 6, MATERIALS_Y + 6, MATERIALS_W - 12, 3, OritechTheme.STATUS_OK);
             return;
         }
         int max = Math.max(0, missing.size() - ROWS);
         offset = Math.clamp(offset, 0, max);
-        graphics.fill(MATERIALS_X, MATERIALS_Y, MATERIALS_X + MATERIALS_W, MATERIALS_Y + ROWS * 12, 0xFF1B2127);
+        int hoveredRow = hoveredMissingRow(mouseX, mouseY);
         for (int row = 0; row < ROWS && offset + row < missing.size(); row++) {
             var entry = missing.get(offset + row);
             int y = MATERIALS_Y + 2 + row * 12;
+            if (row == hoveredRow) {
+                graphics.fill(MATERIALS_X + 2, y, MATERIALS_X + MATERIALS_W - 7, y + 11, 0x38D18B33);
+            }
             String count = Integer.toString(entry.count());
-            int countX = MATERIALS_X + MATERIALS_W - 9 - font.width(count);
+            int countX = MATERIALS_X + MATERIALS_W - 10 - font.width(count);
             line(graphics, new ItemStack(BuiltInRegistries.ITEM.getValue(entry.item())).getHoverName(),
-                    MATERIALS_X + 3, y, countX - (MATERIALS_X + 6), TEXT);
-            line(graphics, Component.literal(count), countX, y, font.width(count), RED);
+                    MATERIALS_X + 4, y + 1, countX - (MATERIALS_X + 7),
+                    row == hoveredRow ? OritechTheme.ORANGE_BRIGHT : OritechTheme.TEXT_LIGHT);
+            line(graphics, Component.literal(count), countX, y + 1, font.width(count), OritechTheme.STATUS_ALERT);
         }
         if (max > 0) {
-            int x = MATERIALS_X + MATERIALS_W - 5, height = ROWS * 12;
+            int x = MATERIALS_X + MATERIALS_W - 6, height = ROWS * 12;
             int thumb = Math.max(10, height * ROWS / missing.size());
-            int y = MATERIALS_Y + (height - thumb) * offset / max;
-            graphics.fill(x, MATERIALS_Y, x + 4, MATERIALS_Y + height, 0xFF101417);
-            graphics.fill(x, y, x + 4, y + thumb, 0xFF8594A4);
+            int y = MATERIALS_Y + 2 + (height - thumb) * offset / max;
+            graphics.fill(x, MATERIALS_Y + 2, x + 4, MATERIALS_Y + 2 + height, 0xFF14161A);
+            graphics.fill(x, y, x + 4, y + thumb, OritechTheme.ORANGE_BRIGHT);
         }
+    }
+
+    private int hoveredMissingRow(double mouseX, double mouseY) {
+        if (!overMaterials(mouseX, mouseY) || mouseX >= leftPos + MATERIALS_X + MATERIALS_W - 7) return -1;
+        var list = missing();
+        if (list.isEmpty()) return -1;
+        int row = ((int) mouseY - (topPos + MATERIALS_Y + 2)) / 12;
+        if (row < 0 || row >= ROWS || offset + row >= list.size()) return -1;
+        return row;
     }
 
     private List<PrinterReport.Missing> missing() {
@@ -349,7 +431,7 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
 
     private boolean overMaterials(double x, double y) {
         return x >= leftPos + MATERIALS_X && x < leftPos + MATERIALS_X + MATERIALS_W
-                && y >= topPos + MATERIALS_Y && y < topPos + MATERIALS_Y + ROWS * 12;
+                && y >= topPos + MATERIALS_Y + 2 && y < topPos + MATERIALS_Y + 2 + ROWS * 12;
     }
 
     private boolean overModel(double x, double y) {
@@ -359,6 +441,10 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
 
     @Override
     public boolean mouseScrolled(double x, double y, double dx, double dy) {
+        if (previewLayout != null && overModel(x, y) && dy != 0) {
+            zoom = AssemblyPreview.clampZoom(zoom * (dy > 0 ? 1.15f : 1f / 1.15f));
+            return true;
+        }
         if (overMaterials(x, y) && dy != 0) {
             offset = Math.clamp(offset + (dy < 0 ? 1 : -1), 0, Math.max(0, missing().size() - ROWS));
             return true;
@@ -369,14 +455,29 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         double x = event.x(), y = event.y();
-        if (event.button() == 0 && previewLayout != null && overModel(x, y)) {
-            rotating = true;
-            return true;
+        if (previewLayout != null && overModel(x, y)) {
+            if (event.button() == 0) {
+                rotating = true;
+                return true;
+            }
+            if (event.button() == 1) {
+                orientation.set(AssemblyPreview.defaultOrientation());
+                zoom = 1.0f;
+                return true;
+            }
         }
         int max = Math.max(0, missing().size() - ROWS);
-        if (event.button() == 0 && max > 0 && overMaterials(x, y) && x >= leftPos + MATERIALS_X + MATERIALS_W - 6) {
-            offset = Math.clamp((int) Math.round((y - topPos - MATERIALS_Y) * max / (ROWS * 12 - 1)), 0, max);
+        if (event.button() == 0 && max > 0 && overMaterials(x, y) && x >= leftPos + MATERIALS_X + MATERIALS_W - 7) {
+            offset = Math.clamp((int) Math.round((y - topPos - MATERIALS_Y - 2) * max / (ROWS * 12 - 1)), 0, max);
             return true;
+        }
+        if (event.button() == 0 && menu.operationMode() == PrinterControlRequest.OperationMode.BUILD && !menu.creativeJob()) {
+            int row = hoveredMissingRow(x, y);
+            if (row >= 0) {
+                var item = BuiltInRegistries.ITEM.getValue(missing().get(offset + row).item());
+                JEIPlugin.showRecipe(new ItemStack(item));
+                return true;
+            }
         }
         return super.mouseClicked(event, doubleClick);
     }
@@ -384,8 +485,7 @@ final class PrinterScreen extends AbstractContainerScreen<PrinterMenu> {
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
         if (rotating && event.button() == 0) {
-            yaw = (yaw + (float) dx * .035f) % (float) (2 * Math.PI);
-            pitch = Math.clamp(pitch + (float) dy * .035f, -1.35f, 1.35f);
+            AssemblyPreview.orbit(orientation, dx, dy);
             return true;
         }
         return super.mouseDragged(event, dx, dy);

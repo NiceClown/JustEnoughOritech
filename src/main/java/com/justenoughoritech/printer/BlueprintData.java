@@ -11,15 +11,33 @@ import net.minecraft.world.level.block.Rotation;
 import java.util.Objects;
 import java.util.Optional;
 
-public record BlueprintData(PrinterLayout layout, Optional<Anchor> anchor) {
+public record BlueprintData(PrinterLayout layout, Optional<Anchor> anchor, String name) {
+    public static final int MAX_NAME_LENGTH = 48;
+
     public BlueprintData {
         Objects.requireNonNull(layout, "layout");
         anchor = anchor == null ? Optional.empty() : anchor;
+        name = sanitizeName(name);
+    }
+
+    public BlueprintData(PrinterLayout layout, Optional<Anchor> anchor) {
+        this(layout, anchor, "");
+    }
+
+    public static String sanitizeName(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        var sb = new StringBuilder();
+        for (int i = 0; i < raw.length() && sb.length() < MAX_NAME_LENGTH; i++) {
+            char ch = raw.charAt(i);
+            if (!Character.isISOControl(ch)) sb.append(ch);
+        }
+        return sb.toString().trim();
     }
 
     public static final Codec<BlueprintData> CODEC = RecordCodecBuilder.create(i -> i.group(
             PrinterLayout.CODEC.fieldOf("layout").forGetter(BlueprintData::layout),
-            Anchor.CODEC.optionalFieldOf("anchor").forGetter(BlueprintData::anchor)
+            Anchor.CODEC.optionalFieldOf("anchor").forGetter(BlueprintData::anchor),
+            Codec.STRING.optionalFieldOf("name", "").forGetter(BlueprintData::name)
     ).apply(i, BlueprintData::new));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, BlueprintData> STREAM_CODEC = StreamCodec.of(
@@ -27,13 +45,15 @@ public record BlueprintData(PrinterLayout layout, Optional<Anchor> anchor) {
                 data.layout().encode(buf);
                 buf.writeBoolean(data.anchor().isPresent());
                 data.anchor().ifPresent(anchor -> Anchor.STREAM_CODEC.encode(buf, anchor));
+                buf.writeUtf(data.name(), MAX_NAME_LENGTH);
             },
             buf -> {
                 var layout = PrinterLayout.decode(buf);
                 Optional<Anchor> anchor = buf.readBoolean()
                         ? Optional.of(Anchor.STREAM_CODEC.decode(buf))
                         : Optional.empty();
-                return new BlueprintData(layout, anchor);
+                String name = buf.readUtf(MAX_NAME_LENGTH);
+                return new BlueprintData(layout, anchor, name);
             }
     );
 

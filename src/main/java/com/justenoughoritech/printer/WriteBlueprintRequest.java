@@ -16,10 +16,15 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import java.util.Objects;
 import java.util.Optional;
 
-public record WriteBlueprintRequest(PrinterLayout layout, Optional<BlueprintData.Anchor> anchor) implements CustomPacketPayload {
+public record WriteBlueprintRequest(PrinterLayout layout, Optional<BlueprintData.Anchor> anchor, String name) implements CustomPacketPayload {
     public WriteBlueprintRequest {
         Objects.requireNonNull(layout, "layout");
         anchor = anchor == null ? Optional.empty() : anchor;
+        name = BlueprintData.sanitizeName(name);
+    }
+
+    public WriteBlueprintRequest(PrinterLayout layout, Optional<BlueprintData.Anchor> anchor) {
+        this(layout, anchor, "");
     }
 
     public static final Type<WriteBlueprintRequest> TYPE =
@@ -30,13 +35,15 @@ public record WriteBlueprintRequest(PrinterLayout layout, Optional<BlueprintData
                 req.layout().encode(buf);
                 buf.writeBoolean(req.anchor().isPresent());
                 req.anchor().ifPresent(a -> BlueprintData.Anchor.STREAM_CODEC.encode(buf, a));
+                buf.writeUtf(req.name(), BlueprintData.MAX_NAME_LENGTH);
             },
             buf -> {
                 var layout = PrinterLayout.decode(buf);
                 Optional<BlueprintData.Anchor> anchor = buf.readBoolean()
                         ? Optional.of(BlueprintData.Anchor.STREAM_CODEC.decode(buf))
                         : Optional.empty();
-                return new WriteBlueprintRequest(layout, anchor);
+                String name = buf.readUtf(BlueprintData.MAX_NAME_LENGTH);
+                return new WriteBlueprintRequest(layout, anchor, name);
             }
     );
 
@@ -59,7 +66,7 @@ public record WriteBlueprintRequest(PrinterLayout layout, Optional<BlueprintData
             return;
         }
         var stack = new ItemStack(PrinterContent.BLUEPRINT.get());
-        stack.set(PrinterContent.BLUEPRINT_DATA.get(), new BlueprintData(request.layout(), request.anchor()));
+        stack.set(PrinterContent.BLUEPRINT_DATA.get(), new BlueprintData(request.layout(), request.anchor(), request.name()));
         player.getInventory().placeItemBackInInventory(stack);
         player.sendOverlayMessage(Component.translatable("gui.just_enough_oritech.blueprint_written"));
     }

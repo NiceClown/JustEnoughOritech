@@ -772,7 +772,7 @@ public final class ReactorDesigner {
     }
 
     public static int growthLimit(int serverLimit) {
-        return Math.min(64,serverLimit);
+        return Math.min(com.justenoughoritech.printer.PrinterLayout.LIMIT, Math.max(1, serverLimit));
     }
 
     static boolean balanced(ReactorLayout layout) {

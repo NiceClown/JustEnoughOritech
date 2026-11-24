@@ -44,8 +44,8 @@ class PrinterLayoutTest {
     }
 
     @Test
-    void limitMatchesOritechMaxInterior64() {
-        assertEquals(64, PrinterLayout.LIMIT);
+    void limitMatchesExpanded256() {
+        assertEquals(256, PrinterLayout.LIMIT);
     }
 
     @Test
@@ -108,10 +108,16 @@ class PrinterLayoutTest {
         // Invalid draft propagates null through resolve().
         assertNull(new PrinterLayout(0, 1, 1, 1, List.of()).resolve(64, PARTS));
 
-        // Exceeds LIMIT=64 even if server maxSize claims 66
-        assertNull(new PrinterLayout(65, 1, 1, 1, Collections.nCopies(65, SINGLE.id())).resolveDraft(66, PARTS));
-        assertNull(new PrinterLayout(1, 65, 1, 1, Collections.nCopies(65, SINGLE.id())).resolveDraft(66, PARTS));
-        assertNull(new PrinterLayout(1, 1, 65, 1, oneRod).resolveDraft(66, PARTS));
+        // Above 64 is allowed when server maxSize allows it, up to LIMIT=256.
+        assertNotNull(new PrinterLayout(65, 1, 1, 1, Collections.nCopies(65, SINGLE.id())).resolveDraft(66, PARTS));
+        assertNotNull(new PrinterLayout(256, 1, 1, 1, Collections.nCopies(256, SINGLE.id())).resolve(256, PARTS));
+        assertNotNull(new PrinterLayout(1, 256, 1, 1, Collections.nCopies(256, SINGLE.id())).resolve(256, PARTS));
+        assertNotNull(new PrinterLayout(1, 1, 256, 1, oneRod).resolve(256, PARTS));
+
+        // Exceeds LIMIT=256 even if server maxSize claims 300.
+        assertNull(new PrinterLayout(257, 1, 1, 1, Collections.nCopies(257, SINGLE.id())).resolveDraft(300, PARTS));
+        assertNull(new PrinterLayout(1, 257, 1, 1, Collections.nCopies(257, SINGLE.id())).resolveDraft(300, PARTS));
+        assertNull(new PrinterLayout(1, 1, 257, 1, oneRod).resolveDraft(300, PARTS));
         // Ports bounds: 1x1x1 allows max 3 ports
         assertNull(new PrinterLayout(1, 1, 1, 0, oneRod).resolveDraft(64, PARTS));
         assertNotNull(new PrinterLayout(1, 1, 1, 3, oneRod).resolveDraft(64, PARTS));
@@ -144,9 +150,13 @@ class PrinterLayoutTest {
         var decoded = PrinterLayout.CODEC.parse(JsonOps.INSTANCE, reparsed).getOrThrow();
         assertEquals(plan, decoded);
 
-        // Out-of-range JSON values fail codec validation (width=65 > LIMIT=64, ports=0, missing field)
+        // 256 passes JSON codec; 257 > LIMIT=256 fails codec validation (along with ports=0, missing field).
+        var cells256 = Collections.nCopies(256, SINGLE.id());
+        var bigJson = PrinterLayout.CODEC.encodeStart(JsonOps.INSTANCE,
+                new PrinterLayout(256, 1, 1, 1, cells256)).getOrThrow();
+        assertEquals(256, PrinterLayout.CODEC.parse(JsonOps.INSTANCE, bigJson).getOrThrow().width());
         assertTrue(PrinterLayout.CODEC.parse(JsonOps.INSTANCE,
-                JsonParser.parseString("{\"width\":65,\"length\":1,\"height\":1,\"ports\":1,\"cells\":[\"\"]}")).isError());
+                JsonParser.parseString("{\"width\":257,\"length\":1,\"height\":1,\"ports\":1,\"cells\":[\"\"]}")).isError());
         assertTrue(PrinterLayout.CODEC.parse(JsonOps.INSTANCE,
                 JsonParser.parseString("{\"width\":1,\"length\":1,\"height\":1,\"ports\":0,\"cells\":[\"\"]}")).isError());
         assertTrue(PrinterLayout.CODEC.parse(JsonOps.INSTANCE,
@@ -182,8 +192,8 @@ class PrinterLayoutTest {
     void binaryDecodeAndEncodeRejectMalformedPacketsAndInvalidPalettes() {
         // Invalid dimensions on wire
         for (int[] bad : new int[][]{
-                {0, 1, 1, 1}, {65, 1, 1, 1}, {1, 0, 1, 1}, {1, 65, 1, 1},
-                {1, 1, 0, 1}, {1, 1, 65, 1}, {1, 1, 1, 0}, {1, 1, 1, 4}
+                {0, 1, 1, 1}, {257, 1, 1, 1}, {1, 0, 1, 1}, {1, 257, 1, 1},
+                {1, 1, 0, 1}, {1, 1, 257, 1}, {1, 1, 1, 0}, {1, 1, 1, 4}
         }) {
             var b = buf();
             b.writeVarInt(bad[0]);
@@ -213,20 +223,26 @@ class PrinterLayoutTest {
         badIndex.writeByte(1); // >= palette size 1
         assertThrows(IllegalArgumentException.class, () -> PrinterLayout.decode(badIndex));
 
-        // Exact 1x1x1 and 64-on-single-axis round-trips on binary wire (kills decode/encode boundary mutants).
+        // Exact 1x1x1 and 256-on-single-axis round-trips on binary wire.
         var minPlan = new PrinterLayout(1, 1, 1, 1, List.of(SINGLE.id()));
         var bMin = buf();
         minPlan.encode(bMin);
         assertEquals(minPlan, PrinterLayout.decode(bMin));
         assertEquals(0, bMin.readableBytes());
 
+        var widePlan = new PrinterLayout(256, 1, 1, 1, Collections.nCopies(256, SINGLE.id()));
+        var bWide = buf();
+        widePlan.encode(bWide);
+        assertEquals(widePlan, PrinterLayout.decode(bWide));
+        assertEquals(0, bWide.readableBytes());
+
         // encode rejects every invalid dimension/port individually
         assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(0, 1, 1, 1, List.of()).encode(buf()));
-        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(65, 1, 1, 1, Collections.nCopies(65, "")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(257, 1, 1, 1, Collections.nCopies(257, "")).encode(buf()));
         assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 0, 1, 1, List.of()).encode(buf()));
-        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 65, 1, 1, Collections.nCopies(65, "")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 257, 1, 1, Collections.nCopies(257, "")).encode(buf()));
         assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 0, 1, List.of("")).encode(buf()));
-        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 65, 1, List.of("")).encode(buf()));
+        assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 257, 1, List.of("")).encode(buf()));
         assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 1, 0, List.of("")).encode(buf()));
         assertThrows(IllegalArgumentException.class, () -> new PrinterLayout(1, 1, 1, 4, List.of("")).encode(buf()));
 

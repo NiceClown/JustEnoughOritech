@@ -17,7 +17,35 @@ import java.util.Objects;
 public record PrinterControlRequest(BlockPos printer, Action action, int x, int y, int z,
                                     Direction face, Rotation rotation) implements CustomPacketPayload {
     public enum Action {
-        MOVE, ROTATE, FLIP_X, FLIP_Z, SET_FACE, SET_ANCHOR, RESET_POSITION, RESET_PROGRESS
+        MOVE, ROTATE, FLIP_X, FLIP_Z, SET_FACE, SET_ANCHOR, RESET_POSITION, RESET_PROGRESS, CYCLE_REDSTONE, TOGGLE_MODE
+    }
+
+    public enum RedstoneMode { HIGH, LOW, ALWAYS }
+
+    public enum OperationMode { BUILD, DECONSTRUCT }
+
+    public static boolean isRedstoneSatisfied(RedstoneMode mode, boolean hasSignal) {
+        return switch (mode == null ? RedstoneMode.HIGH : mode) {
+            case HIGH -> hasSignal;
+            case LOW -> !hasSignal;
+            case ALWAYS -> true;
+        };
+    }
+
+    public static final int TARGET_BUILD_TICKS = 3_600;
+    public static final int MAX_BLOCKS_PER_TICK = 512;
+
+    /** Scale per-tick placement rate linearly so vanilla max (66x66x66) finishes within <= 3 minutes. */
+    public static int blocksPerTick(int totalPlacements) {
+        if (totalPlacements <= 0) return 1;
+        return Math.clamp((totalPlacements + TARGET_BUILD_TICKS - 1) / TARGET_BUILD_TICKS, 1, MAX_BLOCKS_PER_TICK);
+    }
+
+    public static int analogOutputSignal(boolean hasJob, int done, int total, boolean complete) {
+        if (!hasJob || total <= 0) return 0;
+        if (complete || done >= total) return 15;
+        if (total == 1) return 1;
+        return (int) Math.clamp(1L + (done * 13L) / (total - 1), 1L, 14L);
     }
 
     public PrinterControlRequest {
@@ -80,7 +108,8 @@ public record PrinterControlRequest(BlockPos printer, Action action, int x, int 
         if (!(context.player() instanceof ServerPlayer player) || player.isSpectator()) return;
         var level = player.level();
         var pos = request.printer();
-        if (!pos.closerToCenterThan(player.position(), PrinterEntity.RANGE)
+        int maxRange = request.action() == Action.SET_ANCHOR ? PrinterEntity.ANCHOR_RANGE : PrinterEntity.RANGE;
+        if (!pos.closerToCenterThan(player.position(), maxRange)
                 || !level.hasChunkAt(pos)
                 || !(level.getBlockEntity(pos) instanceof PrinterEntity printer)) {
             player.sendOverlayMessage(Component.translatable("gui.just_enough_oritech.printer_missing"));

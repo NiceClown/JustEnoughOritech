@@ -38,6 +38,13 @@ public final class JEIPlugin implements IModPlugin {
         if (runtime != null) runtime.getRecipesGui().showTypes(List.of(TYPE));
     }
 
+    public static void showRecipe(ItemStack stack) {
+        if (runtime == null || stack == null || stack.isEmpty()) return;
+        var focus = runtime.getJeiHelpers().getFocusFactory()
+                .createFocus(RecipeIngredientRole.OUTPUT, mezz.jei.api.constants.VanillaTypes.ITEM_STACK, stack);
+        runtime.getRecipesGui().show(focus);
+    }
+
     @Override public Identifier getPluginUid() {
         return Identifier.fromNamespaceAndPath("just_enough_oritech", "jei_plugin");
     }

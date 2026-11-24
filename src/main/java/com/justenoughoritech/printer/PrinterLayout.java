@@ -14,7 +14,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public record PrinterLayout(int width, int length, int height, int ports, List<String> cells) {
-    public static final int LIMIT = 64;
+    public static final int LIMIT = 256;
     public static final Codec<PrinterLayout> CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.intRange(1,LIMIT).fieldOf("width").forGetter(PrinterLayout::width),
             Codec.intRange(1,LIMIT).fieldOf("length").forGetter(PrinterLayout::length),

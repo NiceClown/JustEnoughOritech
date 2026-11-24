@@ -116,11 +116,67 @@ class PrinterPacketsAndInspectionTest {
             assertEquals("just_enough_oritech:write_blueprint", WriteBlueprintRequest.TYPE.id().toString());
         }
 
-        var writeAuto = new WriteBlueprintRequest(layout, Optional.empty());
+        var writeAuto = new WriteBlueprintRequest(layout, Optional.empty(), "  My   Core\n1  ");
+        assertEquals("My   Core1", writeAuto.name());
         var bWriteAuto = buf();
         WriteBlueprintRequest.CODEC.encode(bWriteAuto, writeAuto);
         assertEquals(writeAuto, WriteBlueprintRequest.CODEC.decode(bWriteAuto));
         assertEquals(0, bWriteAuto.readableBytes());
+
+        // Legacy JSON without "name" field deserializes safely to empty name.
+        var legacyJson = new com.google.gson.JsonObject();
+        legacyJson.add("layout", PrinterLayout.CODEC.encodeStart(JsonOps.INSTANCE, layout).getOrThrow());
+        var parsedLegacy = BlueprintData.CODEC.parse(JsonOps.INSTANCE, legacyJson).getOrThrow();
+        assertEquals("", parsedLegacy.name());
+
+        var benchUnanchored = new OpenBlueprintBenchRequest(layout, Optional.empty(), "  Mega\nBase  ");
+        assertEquals("MegaBase", benchUnanchored.name());
+        var bBench1 = buf();
+        OpenBlueprintBenchRequest.CODEC.encode(bBench1, benchUnanchored);
+        assertEquals(benchUnanchored, OpenBlueprintBenchRequest.CODEC.decode(bBench1));
+        assertEquals(0, bBench1.readableBytes());
+
+        var benchAnchored = new OpenBlueprintBenchRequest(layout,
+                Optional.of(new BlueprintData.Anchor(dim, pos, Rotation.CLOCKWISE_90)), "Alpha");
+        var bBench2 = buf();
+        OpenBlueprintBenchRequest.CODEC.encode(bBench2, benchAnchored);
+        assertEquals(benchAnchored, OpenBlueprintBenchRequest.CODEC.decode(bBench2));
+        assertEquals(0, bBench2.readableBytes());
+        assertEquals("just_enough_oritech:open_blueprint_bench", OpenBlueprintBenchRequest.TYPE.id().toString());
+
+        var renameReq = new UpdateBlueprintBenchNameRequest("  Renamed\tReactor  ");
+        assertEquals("RenamedReactor", renameReq.name());
+        var bRename = buf();
+        UpdateBlueprintBenchNameRequest.CODEC.encode(bRename, renameReq);
+        assertEquals(renameReq, UpdateBlueprintBenchNameRequest.CODEC.decode(bRename));
+        assertEquals(0, bRename.readableBytes());
+        assertEquals("just_enough_oritech:blueprint_bench_name", UpdateBlueprintBenchNameRequest.TYPE.id().toString());
+    }
+
+    @Test
+    void printerMenuPacksAndUnpacks32BitProgressCountsCleanly() {
+        for (int v : new int[]{0, 1, 125, 32_767, 32_768, 65_535, 65_536, 125_000, 17_173_512}) {
+            int low = PrinterMenu.packLow(v);
+            int high = PrinterMenu.packHigh(v);
+            assertEquals(v, PrinterMenu.unpackInt(low, high), "32-bit unpack failed for " + v);
+        }
+    }
+
+    @Test
+    void comparatorSignalAndRedstoneModesCoverAllStates() {
+        assertEquals(0, PrinterControlRequest.analogOutputSignal(false, 0, 0, false));
+        assertEquals(0, PrinterControlRequest.analogOutputSignal(false, 5, 10, true));
+        assertEquals(1, PrinterControlRequest.analogOutputSignal(true, 0, 100, false));
+        assertEquals(7, PrinterControlRequest.analogOutputSignal(true, 50, 100, false));
+        assertEquals(14, PrinterControlRequest.analogOutputSignal(true, 99, 100, false));
+        assertEquals(15, PrinterControlRequest.analogOutputSignal(true, 100, 100, true));
+
+        assertTrue(PrinterControlRequest.isRedstoneSatisfied(PrinterControlRequest.RedstoneMode.HIGH, true));
+        assertFalse(PrinterControlRequest.isRedstoneSatisfied(PrinterControlRequest.RedstoneMode.HIGH, false));
+        assertFalse(PrinterControlRequest.isRedstoneSatisfied(PrinterControlRequest.RedstoneMode.LOW, true));
+        assertTrue(PrinterControlRequest.isRedstoneSatisfied(PrinterControlRequest.RedstoneMode.LOW, false));
+        assertTrue(PrinterControlRequest.isRedstoneSatisfied(PrinterControlRequest.RedstoneMode.ALWAYS, true));
+        assertTrue(PrinterControlRequest.isRedstoneSatisfied(PrinterControlRequest.RedstoneMode.ALWAYS, false));
     }
 
     @Test
@@ -248,5 +304,25 @@ class PrinterPacketsAndInspectionTest {
         assertTrue(mid.unloaded());
         assertEquals(origin.offset(5, 3, 2), mid.obstruction());
         assertEquals(Map.of(ReactorLayout.WALL, 1, ReactorLayout.CONTROLLER, 1), mid.requiredIds());
+    }
+
+    @Test
+    void printerBlocksPerTickScalesLinearlyUnderThreeMinutesForVanillaMax() {
+        assertEquals(1, PrinterControlRequest.blocksPerTick(0));
+        assertEquals(1, PrinterControlRequest.blocksPerTick(125));
+        assertEquals(1, PrinterControlRequest.blocksPerTick(3_600));
+        assertEquals(2, PrinterControlRequest.blocksPerTick(3_601));
+
+        int vanillaMax = 66 * 66 * 66; // 287,496 blocks
+        int vanillaRate = PrinterControlRequest.blocksPerTick(vanillaMax);
+        assertEquals(80, vanillaRate);
+        assertTrue(Math.ceil((double) vanillaMax / vanillaRate) <= 3_600,
+                "Vanilla 66^3 reactor must complete in <= 3600 ticks (3 min)");
+
+        int millionRate = PrinterControlRequest.blocksPerTick(1_000_000);
+        assertEquals(278, millionRate);
+        assertTrue(Math.ceil(1_000_000.0 / millionRate) <= 3_600);
+
+        assertEquals(PrinterControlRequest.MAX_BLOCKS_PER_TICK, PrinterControlRequest.blocksPerTick(10_000_000));
     }
 }

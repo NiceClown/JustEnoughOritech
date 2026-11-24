@@ -14,8 +14,10 @@ public final class ClientBootstrap {
         NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST,SimulatorWidget::handleDrag);
         NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST,SimulatorWidget::handleScroll);
         NeoForge.EVENT_BUS.addListener(ClientBootstrap::onLoggingOut);
-        modBus.addListener((net.neoforged.neoforge.client.event.RegisterMenuScreensEvent event) ->
-                event.register(com.justenoughoritech.printer.PrinterContent.MENU.get(),PrinterScreen::new));
+        modBus.addListener((net.neoforged.neoforge.client.event.RegisterMenuScreensEvent event) -> {
+                event.register(com.justenoughoritech.printer.PrinterContent.MENU.get(), PrinterScreen::new);
+                event.register(com.justenoughoritech.printer.PrinterContent.BENCH_MENU.get(), BlueprintBenchScreen::new);
+        });
         modBus.addListener((net.neoforged.neoforge.client.event.RegisterPictureInPictureRenderersEvent event) ->
                 event.register(AssemblyPreview.State.class, AssemblyPreview::new));
     }

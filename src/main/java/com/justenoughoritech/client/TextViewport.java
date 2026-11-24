@@ -19,16 +19,17 @@ final class TextViewport {
     void line(GuiGraphicsExtractor graphics, Font font, Component label, int x, int y,
               int width, int color, boolean centered) {
         if (width <= 0) return;
+        boolean shadow = needsShadow(color);
         int measured = font.width(label);
         if (measured <= width) {
             timing.remove(key(x,y));
-            graphics.text(font,label,centered ? x+(width-measured)/2 : x,y,color);
+            graphics.text(font,label,centered ? x+(width-measured)/2 : x,y,color,shadow);
             return;
         }
         int offset = scrollOffset(label,x,y,measured-width,PIXELS_PER_MS);
         graphics.enableScissor(x,y,x+width,y+LINE_HEIGHT);
         try {
-            graphics.text(font,label,x-offset,y,color);
+            graphics.text(font,label,x-offset,y,color,shadow);
         } finally {
             graphics.disableScissor();
         }
@@ -37,6 +38,7 @@ final class TextViewport {
     void paragraph(GuiGraphicsExtractor graphics, Font font, Component label, int x, int y,
                    int width, int rows, int color) {
         if (width <= 0 || rows <= 0) return;
+        boolean shadow = needsShadow(color);
         var lines = font.split(label,width);
         int hidden = Math.max(0,lines.size()-rows);
         int first = 0;
@@ -45,10 +47,17 @@ final class TextViewport {
         graphics.enableScissor(x,y,x+width,y+rows*LINE_HEIGHT);
         try {
             for (int i=first;i<Math.min(lines.size(),first+rows);i++)
-                graphics.text(font,lines.get(i),x,y+(i-first)*LINE_HEIGHT,color);
+                graphics.text(font,lines.get(i),x,y+(i-first)*LINE_HEIGHT,color,shadow);
         } finally {
             graphics.disableScissor();
         }
+    }
+
+    private static boolean needsShadow(int argb) {
+        int r = (argb >>> 16) & 0xFF;
+        int g = (argb >>> 8) & 0xFF;
+        int b = argb & 0xFF;
+        return (r * 299 + g * 587 + b * 114) >= 110_000;
     }
 
     private int scrollOffset(Component label,int x,int y,int max,double speed) {

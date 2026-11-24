@@ -6,7 +6,6 @@ import com.justenoughoritech.printer.PrinterLayout;
 import com.justenoughoritech.sim.ReactorLayout;
 import com.mojang.serialization.JsonOps;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
@@ -17,8 +16,7 @@ import static com.justenoughoritech.client.SimulatorWidget.tr;
 final class LayoutToolsScreen extends Screen {
     private static final Workbench WB = Workbench.INSTANCE;
     private static final int HEIGHT = 200, GAP = 4, PAD = 8;
-    private static final int MAX_CLIPBOARD_LENGTH = 512 * 1024;
-    private static final int TEXT = 0xFFF1F3F5, MUTED = 0xFFBCC9D4, ERROR = 0xFFFF9A83;
+    private static final int MAX_CLIPBOARD_LENGTH = 2 * 1024 * 1024;
 
     private final Screen parent;
     private final TextViewport textViewport = new TextViewport();
@@ -41,23 +39,23 @@ final class LayoutToolsScreen extends Screen {
         coreLength = field(1, 45, "layout_length", WB.layout.length());
         stackHeight = field(2, 45, "layout_height", WB.layout.height());
         ports = field(3, 45, "layout_ports", WB.layout.energyPorts());
-        button(0, 67, 2, "layout_resize", () -> resize(false));
-        button(2, 67, 2, "layout_replace", () -> resize(true));
+        button(0, 67, 2, "layout_resize", OritechTheme.ButtonStyle.ORANGE, () -> resize(false));
+        button(2, 67, 2, "layout_replace", OritechTheme.ButtonStyle.RED, () -> resize(true));
 
         xCopies = field(0, 97, "layout_x_copies", 2);
         zCopies = field(1, 97, "layout_z_copies", 2);
-        button(2, 97, 2, "layout_tile", this::tile);
+        button(2, 97, 2, "layout_tile", OritechTheme.ButtonStyle.DARK, this::tile);
 
         rowCount = field(3, 120, "layout_count", 1);
-        button(0, 142, 1, "layout_add_rows", () -> changeFootprint(0, 1));
-        button(1, 142, 1, "layout_add_columns", () -> changeFootprint(1, 0));
-        button(2, 142, 1, "layout_remove_rows", () -> changeFootprint(0, -1));
-        button(3, 142, 1, "layout_remove_columns", () -> changeFootprint(-1, 0));
+        button(0, 142, 1, "layout_add_rows", OritechTheme.ButtonStyle.DARK, () -> changeFootprint(0, 1));
+        button(1, 142, 1, "layout_add_columns", OritechTheme.ButtonStyle.DARK, () -> changeFootprint(1, 0));
+        button(2, 142, 1, "layout_remove_rows", OritechTheme.ButtonStyle.DARK, () -> changeFootprint(0, -1));
+        button(3, 142, 1, "layout_remove_columns", OritechTheme.ButtonStyle.DARK, () -> changeFootprint(-1, 0));
 
-        button(0, 165, 1, "layout_import", this::importLayout);
-        button(1, 165, 1, "layout_export", this::exportLayout);
-        addRenderableWidget(Button.builder(Component.translatable("gui.done"), button -> onClose())
-                .bounds(x(2), top + 165, column * 2 + GAP, 18).build());
+        button(0, 165, 1, "layout_import", OritechTheme.ButtonStyle.DARK, this::importLayout);
+        button(1, 165, 1, "layout_export", OritechTheme.ButtonStyle.DARK, this::exportLayout);
+        addRenderableWidget(new OritechButton(x(2), top + 165, column * 2 + GAP, 18,
+                Component.translatable("gui.done"), OritechTheme.ButtonStyle.ORANGE, null, button -> onClose()));
     }
 
     private int x(int index) {
@@ -72,9 +70,9 @@ final class LayoutToolsScreen extends Screen {
         return box;
     }
 
-    private void button(int index, int y, int span, String key, Runnable action) {
-        addRenderableWidget(Button.builder(tr(key), ignored -> action.run())
-                .bounds(x(index), top + y, column * span + GAP * (span - 1), 18).build());
+    private void button(int index, int y, int span, String key, OritechTheme.ButtonStyle style, Runnable action) {
+        addRenderableWidget(new OritechButton(x(index), top + y, column * span + GAP * (span - 1), 18,
+                tr(key), style, null, ignored -> action.run()));
     }
 
     private static int limit() {
@@ -183,20 +181,22 @@ final class LayoutToolsScreen extends Screen {
     @Override public boolean isPauseScreen() { return false; }
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(left, top, left + panelWidth, top + HEIGHT, 0xFF242B32);
-        graphics.outline(left, top, panelWidth, HEIGHT, 0xFF768494);
+        graphics.fill(0, 0, width, height, 0xA8101216);
+        OritechTheme.panel(graphics, left, top, panelWidth, HEIGHT);
+        OritechTheme.headerBar(graphics, left + 1, top + 1, panelWidth - 2, 18);
         int inner = panelWidth - 2 * PAD;
-        line(graphics, title, x(0), top + 7, inner, TEXT);
+        line(graphics, title, x(0), top + 5, inner, OritechTheme.TEXT_LIGHT);
         line(graphics, tr("layout_current", WB.layout.width(), WB.layout.length(), WB.layout.height(), limit()),
-                x(0), top + 21, inner, MUTED);
-        line(graphics, tr("layout_width"), x(0), top + 34, column, MUTED);
-        line(graphics, tr("layout_length"), x(1), top + 34, column, MUTED);
-        line(graphics, tr("layout_height"), x(2), top + 34, column, MUTED);
-        line(graphics, tr("layout_ports"), x(3), top + 34, column, MUTED);
-        line(graphics, tr("layout_x_copies"), x(0), top + 86, column, MUTED);
-        line(graphics, tr("layout_z_copies"), x(1), top + 86, column, MUTED);
-        line(graphics, tr("layout_count"), x(0), top + 125, column * 3 + 2 * GAP, MUTED);
-        line(graphics, status, x(0), top + 188, inner, error ? ERROR : MUTED);
+                x(0), top + 22, inner, OritechTheme.TEXT_DARK_MUTED);
+        line(graphics, tr("layout_width"), x(0), top + 34, column, OritechTheme.TEXT_DARK);
+        line(graphics, tr("layout_length"), x(1), top + 34, column, OritechTheme.TEXT_DARK);
+        line(graphics, tr("layout_height"), x(2), top + 34, column, OritechTheme.TEXT_DARK);
+        line(graphics, tr("layout_ports"), x(3), top + 34, column, OritechTheme.TEXT_DARK);
+        line(graphics, tr("layout_x_copies"), x(0), top + 87, column, OritechTheme.TEXT_DARK);
+        line(graphics, tr("layout_z_copies"), x(1), top + 87, column, OritechTheme.TEXT_DARK);
+        line(graphics, tr("layout_count"), x(0), top + 125, column * 3 + 2 * GAP, OritechTheme.TEXT_DARK);
+        line(graphics, status, x(0), top + 188, inner,
+                error ? OritechTheme.STATUS_ALERT_DARK : OritechTheme.STATUS_OK_DARK);
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
     }
 

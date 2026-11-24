@@ -8,19 +8,31 @@ import com.justenoughoritech.printer.PrinterEntity;
 import com.justenoughoritech.sim.ReactorLayout;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.rendertype.OutputTarget;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.LightCoordsUtil;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.neoforged.api.distmarker.Dist;
@@ -32,7 +44,11 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 import org.lwjgl.glfw.GLFW;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static com.justenoughoritech.client.SimulatorWidget.tr;
@@ -42,7 +58,10 @@ public final class ProjectionController {
     private static final RenderType PROJECTION_LINES = RenderType.create("just_enough_oritech_projection",
             RenderSetup.builder(RenderPipelines.LINES_TRANSLUCENT)
                     .setOutputTarget(OutputTarget.MAIN_TARGET).createRenderSetup());
-    private static final int OUTLINE_LIMIT = 5_000;
+    private static final int GHOST_LIMIT = 4_096;
+    private static final int OUTLINE_LIMIT = 12_000;
+
+    private record GhostBlock(ReactorLayout.Placement placement, BlockState state, int alphaTint, double distSq) {}
     private static KeyMapping lockKey, cancelKey, rotateKey, openKey;
     private static boolean active, locked;
     private static BlockHitResult lockedHit;
@@ -78,6 +97,10 @@ public final class ProjectionController {
     }
 
     public static void begin() {
+        begin(true);
+    }
+
+    private static void begin(boolean closeScreen) {
         var client = Minecraft.getInstance();
         if (client.level == null) return;
         world = client.level;
@@ -93,12 +116,12 @@ public final class ProjectionController {
         drainKey(lockKey);
         drainKey(cancelKey);
         drainKey(rotateKey);
-        client.setScreen(null);
+        if (closeScreen) client.setScreen(null);
     }
 
     static void beginPrinterAim(PrinterEntity target) {
         if (target == null || target.layout() == null) return;
-        begin();
+        begin(true);
         if (!active) return;
         aimTarget = target;
         rotation = target.rotation();
@@ -110,7 +133,7 @@ public final class ProjectionController {
     }
 
     static void previewPrinter(PrinterEntity source) {
-        begin();
+        begin(false);
         if (!active) return;
         printer = source;
         locked = true;
@@ -292,7 +315,12 @@ public final class ProjectionController {
         revision = rev;
         previewRotation = rotation;
         previewMirror = mirror;
-        placements = layout == null ? List.of() : layout.placements(rotation, mirror);
+        if (layout == null) {
+            placements = List.of();
+        } else {
+            long outerVol = (long) (layout.width() + 2) * (layout.height() + 2) * (layout.length() + 2);
+            placements = outerVol > OUTLINE_LIMIT ? List.of() : layout.placements(rotation, mirror);
+        }
         manualInspection = null;
     }
 
@@ -310,30 +338,140 @@ public final class ProjectionController {
         var anchor = printer != null ? printer.anchor() : manualOrigin(selected);
         if (anchor == null) return;
         if (printer == null) refreshManualPlacements();
-        var selectedRotation = printer != null ? printer.rotation() : rotation;
-        var blocks = printer != null ? printer.placements() : placements;
         var camera = Minecraft.getInstance().gameRenderer.getMainCamera().position();
         var pose = event.getPoseStack();
         var buffers = Minecraft.getInstance().renderBuffers().bufferSource();
-        var out = buffers.getBuffer(PROJECTION_LINES);
+        var selectedRotation = printer != null ? printer.rotation() : rotation;
+        var selectedMirror = printer != null ? printer.mirror() : manualMirror();
+        var blocks = printer != null ? printer.placements() : placements;
+        int buildWidth = selected.buildWidth(selectedRotation);
+        long outerVol = (long) (selected.width() + 2) * (selected.height() + 2) * (selected.length() + 2);
+        boolean tooBigForBlocks = outerVol > OUTLINE_LIMIT || blocks.size() > OUTLINE_LIMIT;
+        var obstructions = new ArrayList<BlockPos>();
+        var ghosts = new ArrayList<GhostBlock>();
+
+        if (!tooBigForBlocks && !blocks.isEmpty() && blocks.size() <= GHOST_LIMIT) {
+            var cursor = new BlockPos.MutableBlockPos();
+            var blockCache = new HashMap<String, Block>();
+            for (var block : blocks) {
+                cursor.set(anchor.getX() + block.x(), anchor.getY() + block.y(), anchor.getZ() + block.z());
+                if (!world.hasChunkAt(cursor)) continue;
+                var expected = blockCache.computeIfAbsent(block.blockId(), id -> {
+                    var parsed = Identifier.tryParse(id);
+                    return parsed == null ? null : BuiltInRegistries.BLOCK.getValue(parsed);
+                });
+                if (expected == null) continue;
+                var current = world.getBlockState(cursor);
+                if (current.is(expected)) continue;
+                if (!current.isAir() && !current.canBeReplaced()) {
+                    obstructions.add(cursor.immutable());
+                }
+                var modelState = expected.defaultBlockState();
+                if (ReactorLayout.CONTROLLER.equals(block.blockId()) || ReactorLayout.ENERGY_PORT.equals(block.blockId())) {
+                    var facing = ReactorLayout.wallFacing(block, buildWidth);
+                    if (modelState.hasProperty(BlockStateProperties.FACING)) {
+                        modelState = modelState.setValue(BlockStateProperties.FACING, facing);
+                    } else if (modelState.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+                        modelState = modelState.setValue(BlockStateProperties.HORIZONTAL_FACING, facing);
+                    }
+                }
+                int alphaTint = ReactorLayout.WALL.equals(block.blockId()) ? 0x4CFFFFFF
+                        : (ReactorLayout.CONTROLLER.equals(block.blockId())
+                        || ReactorLayout.ENERGY_PORT.equals(block.blockId())
+                        || ReactorLayout.FUEL_PORT.equals(block.blockId())
+                        || ReactorLayout.COOLANT_PORT.equals(block.blockId())) ? 0xB8FFFFFF : 0xB0FFFFFF;
+                double dx = (cursor.getX() + 0.5) - camera.x;
+                double dy = (cursor.getY() + 0.5) - camera.y;
+                double dz = (cursor.getZ() + 0.5) - camera.z;
+                ghosts.add(new GhostBlock(block, modelState, alphaTint, dx * dx + dy * dy + dz * dz));
+            }
+            ghosts.sort(Comparator.comparingDouble(GhostBlock::distSq).reversed());
+        }
+
         pose.pushPose();
         try {
             pose.mulPose(event.getModelViewMatrix());
             pose.translate(anchor.getX() - camera.x, anchor.getY() - camera.y, anchor.getZ() - camera.z);
-            if (blocks.size() > OUTLINE_LIMIT) {
-                box(out, pose.last(), 0, 0, 0, selected.buildWidth(selectedRotation) + 2, selected.height() + 2,
-                        selected.buildLength(selectedRotation) + 2, 0x9099DDF8);
-            } else {
-                drawBlocks(out, pose, blocks);
+            if (!ghosts.isEmpty()) {
+                drawGhostBlocks(buffers, pose, ghosts);
             }
-            var obstruction = printer != null
+            var out = buffers.getBuffer(PROJECTION_LINES);
+            if (tooBigForBlocks) {
+                box(out, pose.last(), 0, 0, 0, buildWidth + 2, selected.height() + 2,
+                        selected.buildLength(selectedRotation) + 2, 0x9099DDF8);
+                for (var b : selected.layerPlacements(1, selectedRotation, selectedMirror)) {
+                    if (ReactorLayout.CONTROLLER.equals(b.blockId())) {
+                        box(out, pose.last(), b.x(), b.y(), b.z(), b.x() + 1f, b.y() + 1f, b.z() + 1f, 0xFFFFD258, 2.5f);
+                        break;
+                    }
+                }
+            } else if (blocks.size() > GHOST_LIMIT) {
+                drawBlocks(out, pose, blocks);
+            } else if (ghosts.isEmpty()) {
+                box(out, pose.last(), 0, 0, 0, buildWidth + 2, selected.height() + 2,
+                        selected.buildLength(selectedRotation) + 2, 0x9057E09B, 1.5f);
+            } else {
+                box(out, pose.last(), -0.01f, -0.01f, -0.01f, buildWidth + 2.01f, selected.height() + 2.01f,
+                        selected.buildLength(selectedRotation) + 2.01f, 0x4599DDF8, 1f);
+                for (var g : ghosts) {
+                    if (ReactorLayout.CONTROLLER.equals(g.placement().blockId())) {
+                        var b = g.placement();
+                        box(out, pose.last(), b.x() - 0.01f, b.y() - 0.01f, b.z() - 0.01f,
+                                b.x() + 1.01f, b.y() + 1.01f, b.z() + 1.01f, 0xD0FFD258, 2f);
+                        break;
+                    }
+                }
+            }
+            var manualObs = printer != null
                     ? (printer.report() == null ? null : printer.report().obstruction())
                     : (manualInspection == null || !anchor.equals(manualInspection.origin()) ? null : manualInspection.obstruction());
-            if (obstruction != null) drawObstruction(out, pose, anchor, obstruction);
-        } finally {
+            if (!obstructions.isEmpty()) {
+                for (var obs : obstructions) drawObstruction(out, pose, anchor, obs);
+            } else if (manualObs != null) {
+                drawObstruction(out, pose, anchor, manualObs);
+            }
             buffers.endBatch(PROJECTION_LINES);
+        } finally {
             pose.popPose();
         }
+    }
+
+    private static void drawGhostBlocks(net.minecraft.client.renderer.MultiBufferSource.BufferSource buffers,
+                                        PoseStack pose, List<GhostBlock> ghosts) {
+        var models = Minecraft.getInstance().getModelManager().getBlockStateModelSet();
+        var modelCache = new HashMap<BlockState, List<BlockStateModelPart>>();
+        var ghostType = RenderTypes.entityTranslucent(TextureAtlas.LOCATION_BLOCKS);
+        var output = buffers.getBuffer(ghostType);
+        var quadInstance = new QuadInstance();
+        quadInstance.setLightCoords(LightCoordsUtil.FULL_BRIGHT);
+        quadInstance.setOverlayCoords(OverlayTexture.NO_OVERLAY);
+        for (var entry : ghosts) {
+            var b = entry.placement();
+            var parts = modelCache.computeIfAbsent(entry.state(), s -> {
+                var baked = new ArrayList<BlockStateModelPart>();
+                models.get(s).collectParts(RandomSource.create(42), baked);
+                return List.copyOf(baked);
+            });
+            pose.pushPose();
+            pose.translate(b.x() + 0.002f, b.y() + 0.002f, b.z() + 0.002f);
+            pose.scale(0.996f, 0.996f, 0.996f);
+            for (var part : parts) {
+                quadInstance.setColor(entry.alphaTint());
+                for (var quad : part.getQuads(null)) output.putBakedQuad(pose.last(), quad, quadInstance);
+                for (var face : Direction.values()) {
+                    quadInstance.setColor(switch (face) {
+                        case UP -> 0xFFFFFFFF;
+                        case DOWN -> 0xFF999999;
+                        case EAST, WEST -> 0xFFC8C8C8;
+                        case NORTH, SOUTH -> 0xFFE2E2E2;
+                    });
+                    quadInstance.multiplyColor(entry.alphaTint());
+                    for (var quad : part.getQuads(face)) output.putBakedQuad(pose.last(), quad, quadInstance);
+                }
+            }
+            pose.popPose();
+        }
+        buffers.endBatch(ghostType);
     }
 
     private static void drawBlocks(VertexConsumer out, PoseStack pose, List<ReactorLayout.Placement> blocks) {

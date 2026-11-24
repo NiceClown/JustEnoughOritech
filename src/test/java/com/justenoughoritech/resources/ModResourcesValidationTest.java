@@ -129,7 +129,7 @@ class ModResourcesValidationTest {
         for (var mode : ReactorDesigner.CoolingMode.values()) {
             referenced.add("gui.just_enough_oritech.auto_cooling." + mode.name().toLowerCase(Locale.ROOT));
         }
-        for (int state = 0; state <= 6; state++) {
+        for (int state = 0; state <= 8; state++) {
             referenced.add("gui.just_enough_oritech.printer_state." + state);
         }
         for (String step : Set.of("design", "anchor", "write", "slot", "power")) {
@@ -139,22 +139,39 @@ class ModResourcesValidationTest {
             referenced.add("gui.just_enough_oritech.face." + dir.getName());
         }
         referenced.add("item.just_enough_oritech.reactor_blueprint");
+        referenced.add("item.just_enough_oritech.reactor_blueprint_named");
         referenced.add("gui.just_enough_oritech.control.write_blueprint");
         referenced.add("gui.just_enough_oritech.control.blueprint_clear");
         referenced.add("gui.just_enough_oritech.control.blueprint_set");
         referenced.add("gui.just_enough_oritech.control.preview");
+        referenced.add("gui.just_enough_oritech.control.blueprint_load");
+        referenced.add("gui.just_enough_oritech.control.blueprint_scan");
+        referenced.add("gui.just_enough_oritech.control.blueprint_library");
         referenced.add("gui.just_enough_oritech.blueprint_clear_btn");
         referenced.add("gui.just_enough_oritech.blueprint_set_btn");
         referenced.add("gui.just_enough_oritech.blueprint_hint_write");
         referenced.add("gui.just_enough_oritech.blueprint_hint_paper");
         referenced.add("gui.just_enough_oritech.blueprint_paper_put_tip");
         referenced.add("gui.just_enough_oritech.blueprint_paper_remove_tip");
+        referenced.add("gui.just_enough_oritech.heatmap_show");
+        referenced.add("gui.just_enough_oritech.heatmap_hide");
+        referenced.add("gui.just_enough_oritech.preview_3d");
+        referenced.add("gui.just_enough_oritech.preview_layer");
+        referenced.add("gui.just_enough_oritech.edit_area_show");
+        referenced.add("gui.just_enough_oritech.edit_area_hide");
         referenced.add("gui.just_enough_oritech.printer_restart");
         referenced.add("gui.just_enough_oritech.printer_reset_pos");
         referenced.add("gui.just_enough_oritech.printer_preview_hide");
         referenced.add("gui.just_enough_oritech.printer_preview_short");
         referenced.add("gui.just_enough_oritech.printer_orient_badge");
         referenced.add("gui.just_enough_oritech.printer_orient_mirrored");
+        referenced.add("gui.just_enough_oritech.printer_rs.high");
+        referenced.add("gui.just_enough_oritech.printer_rs.low");
+        referenced.add("gui.just_enough_oritech.printer_rs.always");
+        referenced.add("gui.just_enough_oritech.printer_mode.build");
+        referenced.add("gui.just_enough_oritech.printer_mode.deconstruct");
+        referenced.add("gui.just_enough_oritech.jade.core");
+        referenced.add("gui.just_enough_oritech.jade.missing");
         for (String keyName : Set.of("open_simulator", "lock_projection", "cancel_projection", "rotate_projection")) {
             referenced.add("key.just_enough_oritech." + keyName);
         }
@@ -173,6 +190,7 @@ class ModResourcesValidationTest {
                 Files.readString(RESOURCES.resolve("just_enough_oritech.mixins.json"), StandardCharsets.UTF_8))
                 .getAsJsonObject();
         assertTrue(json.get("required").getAsBoolean());
+        assertEquals("JAVA_25", json.get("compatibilityLevel").getAsString());
         String pkg = json.get("package").getAsString();
         assertEquals("com.justenoughoritech.mixin", pkg);
         var clientMixins = json.getAsJsonArray("client");
@@ -213,8 +231,11 @@ class ModResourcesValidationTest {
         var blockstate = JsonParser.parseString(
                 Files.readString(RESOURCES.resolve("assets/just_enough_oritech/blockstates/reactor_printer.json"),
                         StandardCharsets.UTF_8)).getAsJsonObject();
-        assertEquals("just_enough_oritech:block/reactor_printer",
-                blockstate.getAsJsonObject("variants").getAsJsonObject("").get("model").getAsString());
+        var variants = blockstate.getAsJsonObject("variants");
+        for (String dir : Set.of("north", "east", "south", "west")) {
+            assertEquals("just_enough_oritech:block/reactor_printer",
+                    variants.getAsJsonObject("facing=" + dir).get("model").getAsString());
+        }
 
         var itemDef = JsonParser.parseString(
                 Files.readString(RESOURCES.resolve("assets/just_enough_oritech/items/reactor_printer.json"),
@@ -227,17 +248,18 @@ class ModResourcesValidationTest {
                         StandardCharsets.UTF_8)).getAsJsonObject();
         var textures = model.getAsJsonObject("textures");
         assertFalse(textures.isEmpty());
-        byte[] pngMagic = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
         for (var entry : textures.entrySet()) {
             String ref = entry.getValue().getAsString();
             assertTrue(ref.startsWith("just_enough_oritech:"), "Unexpected texture namespace: " + ref);
             Path png = RESOURCES.resolve("assets/just_enough_oritech/textures/" + ref.substring("just_enough_oritech:".length()) + ".png");
-            assertTrue(Files.isRegularFile(png), "Missing texture file: " + png);
-            byte[] bytes = Files.readAllBytes(png);
-            assertTrue(bytes.length > 24);
-            byte[] header = new byte[8];
-            System.arraycopy(bytes, 0, header, 0, 8);
-            assertArrayEquals(pngMagic, header, "Invalid PNG signature in " + png);
+            assert16x16Png(png);
+        }
+
+        // Enforce strict 16x16 native resolution on EVERY block & item texture to avoid shimmer in modpacks.
+        try (var stream = Files.walk(RESOURCES.resolve("assets/just_enough_oritech/textures"))) {
+            var pngs = stream.filter(p -> p.toString().endsWith(".png")).toList();
+            assertTrue(pngs.size() >= 5, "expected all block and item textures");
+            for (Path png : pngs) assert16x16Png(png);
         }
 
         var loot = JsonParser.parseString(
@@ -259,14 +281,20 @@ class ModResourcesValidationTest {
                         StandardCharsets.UTF_8)).getAsJsonObject();
         assertEquals("just_enough_oritech:item/reactor_blueprint",
                 bpModel.getAsJsonObject("textures").get("layer0").getAsString());
+    }
 
-        Path bpPng = RESOURCES.resolve("assets/just_enough_oritech/textures/item/reactor_blueprint.png");
-        assertTrue(Files.isRegularFile(bpPng), "Missing blueprint texture: " + bpPng);
-        byte[] bpBytes = Files.readAllBytes(bpPng);
-        assertTrue(bpBytes.length > 24);
-        byte[] bpHeader = new byte[8];
-        System.arraycopy(bpBytes, 0, bpHeader, 0, 8);
-        assertArrayEquals(pngMagic, bpHeader, "Invalid PNG signature in " + bpPng);
+    private static void assert16x16Png(Path png) throws IOException {
+        byte[] pngMagic = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        assertTrue(Files.isRegularFile(png), "Missing texture file: " + png);
+        byte[] bytes = Files.readAllBytes(png);
+        assertTrue(bytes.length > 24);
+        byte[] header = new byte[8];
+        System.arraycopy(bytes, 0, header, 0, 8);
+        assertArrayEquals(pngMagic, header, "Invalid PNG signature in " + png);
+        int width = ((bytes[16] & 0xFF) << 24) | ((bytes[17] & 0xFF) << 16) | ((bytes[18] & 0xFF) << 8) | (bytes[19] & 0xFF);
+        int height = ((bytes[20] & 0xFF) << 24) | ((bytes[21] & 0xFF) << 16) | ((bytes[22] & 0xFF) << 8) | (bytes[23] & 0xFF);
+        assertEquals(16, width, "Texture width must be 16px for crisp rendering: " + png);
+        assertEquals(16, height, "Texture height must be 16px for crisp rendering: " + png);
     }
 
     @Test

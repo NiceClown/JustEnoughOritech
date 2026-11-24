@@ -18,7 +18,7 @@ import net.minecraft.world.level.block.Rotation;
 public final class PrinterMenu extends AbstractContainerMenu {
     private final BlockPos position;
     private final Inventory inventory;
-    private final DataSlot[] values = new DataSlot[11];
+    private final DataSlot[] values = new DataSlot[17];
 
     public PrinterMenu(int id, Inventory inventory, BlockPos position) {
         super(PrinterContent.MENU.get(), id);
@@ -26,7 +26,7 @@ public final class PrinterMenu extends AbstractContainerMenu {
         this.inventory = inventory;
         var entity = printer();
         Container blueprintContainer = entity != null ? entity.blueprintContainer() : new SimpleContainer(1);
-        addSlot(new Slot(blueprintContainer, 0, 9, 25) {
+        addSlot(new Slot(blueprintContainer, 0, 10, 26) {
             @Override
             public boolean mayPlace(ItemStack stack) {
                 return PrinterEntity.isBlueprintStack(stack);
@@ -60,7 +60,7 @@ public final class PrinterMenu extends AbstractContainerMenu {
                 if (current != null) current.onBlueprintSlotChanged(inventory.player);
             }
         });
-        addStandardInventorySlots(inventory, 9, 162);
+        addStandardInventorySlots(inventory, 12, 182);
         for (int i = 0; i < values.length; i++) {
             final int field = i;
             values[i] = addDataSlot(inventory.player instanceof ServerPlayer ? new DataSlot() {
@@ -77,7 +77,13 @@ public final class PrinterMenu extends AbstractContainerMenu {
                         case 7 -> p.anchored() ? 1 : 0;
                         case 8 -> p.attachFace().get3DDataValue();
                         case 9 -> p.rotation().ordinal();
-                        default -> p.mirror().ordinal();
+                        case 10 -> p.mirror().ordinal();
+                        case 11 -> p.redstoneMode().ordinal();
+                        case 12 -> p.operationMode().ordinal();
+                        case 13 -> packLow(p.progress());
+                        case 14 -> packHigh(p.progress());
+                        case 15 -> packLow(p.totalPlacements());
+                        default -> packHigh(p.totalPlacements());
                     };
                 }
 
@@ -109,6 +115,30 @@ public final class PrinterMenu extends AbstractContainerMenu {
         Mirror[] all = Mirror.values();
         int idx = values[10].get();
         return idx >= 0 && idx < all.length ? all[idx] : Mirror.NONE;
+    }
+    public PrinterControlRequest.RedstoneMode redstoneMode() {
+        var all = PrinterControlRequest.RedstoneMode.values();
+        int idx = values[11].get();
+        return idx >= 0 && idx < all.length ? all[idx] : PrinterControlRequest.RedstoneMode.HIGH;
+    }
+    public PrinterControlRequest.OperationMode operationMode() {
+        var all = PrinterControlRequest.OperationMode.values();
+        int idx = values[12].get();
+        return idx >= 0 && idx < all.length ? all[idx] : PrinterControlRequest.OperationMode.BUILD;
+    }
+    public int progress() { return unpackInt(values[13].get(), values[14].get()); }
+    public int totalPlacements() { return unpackInt(values[15].get(), values[16].get()); }
+
+    public static int packLow(int value) {
+        return value & 0xFFFF;
+    }
+
+    public static int packHigh(int value) {
+        return (value >>> 16) & 0xFFFF;
+    }
+
+    public static int unpackInt(int low, int high) {
+        return ((high & 0xFFFF) << 16) | (low & 0xFFFF);
     }
     public boolean hasJob() { return state() != 0; }
     public boolean canEditProjection() { return hasJob() && authorized() && !started(); }

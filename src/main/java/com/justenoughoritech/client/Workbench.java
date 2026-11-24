@@ -28,8 +28,11 @@ public final class Workbench {
     public int selectedLayer;
     public int gridOffsetX, gridOffsetZ, blockOffset;
     public int cursorX, cursorZ;
-    public boolean layersMode, running, blocksMode;
+    public boolean layersMode, running, blocksMode, heatmap3d;
     public boolean showEditArea=true;
+    public final org.joml.Quaternionf previewOrientation = AssemblyPreview.defaultOrientation();
+    public float previewZoom = 1.0f;
+    public String blueprintName = "";
     public ReactorSimulation simulation;
     public String issue;
     public int speed = 1;
@@ -92,6 +95,11 @@ public final class Workbench {
             ClientRuntimeConfig.setRuntimeCheck(true,null);
         }
     }
+    public void resetPreviewView() {
+        previewOrientation.set(AssemblyPreview.defaultOrientation());
+        previewZoom = 1.0f;
+    }
+
     public ReactorParts.Part selected() {
         return parts.get(Math.floorMod(selectedPart, parts.size()));
     }
@@ -227,6 +235,13 @@ public final class Workbench {
         } else {
             designStatus=SimulatorWidget.tr("auto_found",design.exportRate());
         }
+    }
+
+    public void loadBlueprint(String name, ReactorLayout next) {
+        if (next == null) return;
+        layout.replaceWith(next);
+        blueprintName = com.justenoughoritech.printer.BlueprintData.sanitizeName(name);
+        edited();
     }
 
     public void tick() {

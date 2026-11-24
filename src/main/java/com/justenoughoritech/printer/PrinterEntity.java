@@ -2,10 +2,12 @@ package com.justenoughoritech.printer;
 
 import com.justenoughoritech.network.ServerConfigReader;
 import com.justenoughoritech.sim.ReactorLayout;
+import com.mojang.authlib.GameProfile;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -13,6 +15,7 @@ import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.Container;
 import net.minecraft.world.Containers;
 import net.minecraft.world.MenuProvider;
@@ -34,7 +37,9 @@ import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.common.CommonHooks;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
+import net.neoforged.neoforge.common.util.FakePlayerFactory;
 import net.neoforged.neoforge.event.EventHooks;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.transfer.ResourceHandler;
@@ -48,9 +53,15 @@ import java.util.UUID;
 
 public final class PrinterEntity extends BlockEntity implements MenuProvider {
     static final int RANGE = 32;
-    static final int SHIFT = 64;
-    static final int MAX_BUILD_DISTANCE = 128;
-    private static final int IDLE = 0, WAITING = 1, PRINTING = 2, MATERIALS = 3, OBSTRUCTED = 4, COMPLETE = 5, OWNER = 6;
+    static final int ANCHOR_RANGE = 256;
+    static final int SHIFT = 256;
+    static final int MIN_BUILD_DISTANCE = 128;
+    static final int TARGET_BUILD_TICKS = 3_600;
+    static final int MAX_BLOCKS_PER_TICK = 512;
+    private static final int IDLE = 0, WAITING = 1, PRINTING = 2, MATERIALS = 3, OBSTRUCTED = 4,
+            COMPLETE = 5, OWNER = 6, STORAGE_FULL = 7, DECONSTRUCTING = 8;
+    private static final int BUILD_PARTICLE_COLOR = 0x35B8CC;
+    private static final int DISMANTLE_PARTICLE_COLOR = 0xD18B33;
     private static final Direction[] FALLBACK_FACES = {
             Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.DOWN
     };
@@ -88,6 +99,8 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     private int dx, dy, dz, cursor;
     private int state;
     private boolean clientPower;
+    private PrinterControlRequest.RedstoneMode redstoneMode = PrinterControlRequest.RedstoneMode.HIGH;
+    private PrinterControlRequest.OperationMode operationMode = PrinterControlRequest.OperationMode.BUILD;
     private BuildInspection inspection;
     private PrinterReport report;
     private long nextInspection;
@@ -109,8 +122,13 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     boolean creativeJob() {
         if (!(level instanceof ServerLevel server) || owner == null) return false;
         var player = server.getServer().getPlayerList().getPlayer(owner);
-        return player != null && player.level() == server && worldPosition.closerToCenterThan(player.position(), RANGE)
-                && player.isCreative();
+        return player != null && player.level() == server && player.isCreative();
+    }
+
+    private ServerPlayer actingPlayer(ServerLevel server, ServerPlayer onlineOwner) {
+        if (onlineOwner != null) return onlineOwner;
+        if (owner != null) return FakePlayerFactory.get(server, new GameProfile(owner, "[ReactorPrinter]"));
+        return FakePlayerFactory.getMinecraft(server);
     }
 
     boolean authorized(Player player) {
@@ -133,8 +151,25 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         if (update.origin().equals(anchor())) report = update;
     }
 
-    int progress() { return cursor; }
-    int stateId() { return state; }
+    public String blueprintName() { return loadedBlueprintData == null ? "" : loadedBlueprintData.name(); }
+    public int progress() { return cursor; }
+    public int totalPlacements() { return placements.size(); }
+    public int stateId() { return state; }
+
+    /** Scale per-tick placement rate linearly so vanilla max (66x66x66) finishes within <= 3 minutes. */
+    public static int blocksPerTick(int totalPlacements) {
+        return PrinterControlRequest.blocksPerTick(totalPlacements);
+    }
+    public PrinterControlRequest.RedstoneMode redstoneMode() { return redstoneMode; }
+    public PrinterControlRequest.OperationMode operationMode() { return operationMode; }
+
+    boolean redstoneActive(Level level, BlockPos pos) {
+        return PrinterControlRequest.isRedstoneSatisfied(redstoneMode, level.hasNeighborSignal(pos));
+    }
+
+    public int analogOutputSignal() {
+        return PrinterControlRequest.analogOutputSignal(layout != null, cursor, placements.size(), state == COMPLETE);
+    }
     int offset(int axis) { return switch (axis) { case 0 -> dx; case 1 -> dy; default -> dz; }; }
 
     void onBlueprintSlotChanged(Player actor) {
@@ -165,6 +200,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         loadedBlueprintData = data;
         layout = checked;
         mirror = Mirror.NONE;
+        operationMode = PrinterControlRequest.OperationMode.BUILD;
         dx = dy = dz = cursor = 0;
         applyDefaultPlacement(server, checked, data);
         placements = checked.placements(rotation, mirror);
@@ -177,7 +213,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         if (data.anchor().isPresent()) {
             var worldAnchor = data.anchor().get();
             if (worldAnchor.dimension().equals(server.dimension().identifier())
-                    && worldPosition.closerThan(worldAnchor.origin(), MAX_BUILD_DISTANCE)
+                    && withinBuildDistance(worldAnchor.origin(), checked)
                     && fits(server, worldAnchor.origin(), checked, worldAnchor.rotation())) {
                 anchored = true;
                 attachFace = Direction.UP;
@@ -190,10 +226,10 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         rotation = data.anchor().map(BlueprintData.Anchor::rotation).orElse(Rotation.NONE);
         attachFace = Direction.UP;
         BlockPos candidate = checked.faceOrigin(worldPosition, Direction.UP, rotation);
-        if (!fits(server, candidate, checked, rotation) || !worldPosition.closerThan(candidate, MAX_BUILD_DISTANCE)) {
+        if (!fits(server, candidate, checked, rotation) || !withinBuildDistance(candidate, checked)) {
             for (Direction fallback : FALLBACK_FACES) {
                 BlockPos alt = checked.faceOrigin(worldPosition, fallback, rotation);
-                if (fits(server, alt, checked, rotation) && worldPosition.closerThan(alt, MAX_BUILD_DISTANCE)) {
+                if (fits(server, alt, checked, rotation) && withinBuildDistance(alt, checked)) {
                     attachFace = fallback;
                     candidate = alt;
                     break;
@@ -211,6 +247,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         rotation = Rotation.NONE;
         mirror = Mirror.NONE;
         attachFace = Direction.UP;
+        operationMode = PrinterControlRequest.OperationMode.BUILD;
         anchored = false;
         origin = null;
         placements = List.of();
@@ -222,6 +259,22 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     boolean handleControl(ServerPlayer player, PrinterControlRequest req) {
         if (!authorized(player) || layout == null || !(level instanceof ServerLevel server)) return false;
         if (owner == null && player != null) owner = player.getUUID();
+        if (req.action() == PrinterControlRequest.Action.CYCLE_REDSTONE) {
+            var modes = PrinterControlRequest.RedstoneMode.values();
+            redstoneMode = modes[(redstoneMode.ordinal() + 1) % modes.length];
+            if (state != COMPLETE) state = WAITING;
+            sync();
+            return true;
+        }
+        if (req.action() == PrinterControlRequest.Action.TOGGLE_MODE) {
+            operationMode = operationMode == PrinterControlRequest.OperationMode.BUILD
+                    ? PrinterControlRequest.OperationMode.DECONSTRUCT : PrinterControlRequest.OperationMode.BUILD;
+            cursor = 0;
+            state = WAITING;
+            resetInspection();
+            sync();
+            return true;
+        }
         if (req.action() == PrinterControlRequest.Action.RESET_PROGRESS) {
             cursor = 0;
             state = WAITING;
@@ -247,8 +300,15 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
             case SET_FACE -> setAttachFace(server, req.face());
             case SET_ANCHOR -> setWorldAnchor(server, new BlockPos(req.x(), req.y(), req.z()), req.rotation());
             case RESET_POSITION -> resetToBlueprintDefault(server, player);
-            case RESET_PROGRESS -> true;
+            case RESET_PROGRESS, CYCLE_REDSTONE, TOGGLE_MODE -> true;
         };
+    }
+
+    private boolean withinBuildDistance(BlockPos target, ReactorLayout shape) {
+        if (target == null || shape == null) return false;
+        int maxDim = Math.max(shape.width(), Math.max(shape.length(), shape.height()));
+        double limit = Math.clamp(MIN_BUILD_DISTANCE + maxDim, MIN_BUILD_DISTANCE, 512);
+        return worldPosition.closerThan(target, limit);
     }
 
     private boolean moveOffset(ServerLevel server, int stepX, int stepY, int stepZ) {
@@ -256,7 +316,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         int nextY = Math.clamp(dy + stepY, -SHIFT, SHIFT);
         int nextZ = Math.clamp(dz + stepZ, -SHIFT, SHIFT);
         var target = origin.offset(nextX, nextY, nextZ);
-        if (!worldPosition.closerThan(target, MAX_BUILD_DISTANCE) || !fits(server, target, layout, rotation)) return false;
+        if (!withinBuildDistance(target, layout) || !fits(server, target, layout, rotation)) return false;
         dx = nextX;
         dy = nextY;
         dz = nextZ;
@@ -268,7 +328,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     private boolean applyOrientation(ServerLevel server, Rotation nextRot, Mirror nextMirror) {
         BlockPos newOrigin = anchored ? origin : layout.faceOrigin(worldPosition, attachFace, nextRot);
         var target = newOrigin.offset(dx, dy, dz);
-        if (!worldPosition.closerThan(target, MAX_BUILD_DISTANCE) || !fits(server, target, layout, nextRot)) return false;
+        if (!withinBuildDistance(target, layout) || !fits(server, target, layout, nextRot)) return false;
         origin = newOrigin;
         rotation = nextRot;
         mirror = nextMirror;
@@ -280,7 +340,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
 
     private boolean setAttachFace(ServerLevel server, Direction face) {
         BlockPos newOrigin = layout.faceOrigin(worldPosition, face, rotation);
-        if (!worldPosition.closerThan(newOrigin, MAX_BUILD_DISTANCE) || !fits(server, newOrigin, layout, rotation)) return false;
+        if (!withinBuildDistance(newOrigin, layout) || !fits(server, newOrigin, layout, rotation)) return false;
         anchored = false;
         attachFace = face;
         origin = newOrigin;
@@ -291,7 +351,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     }
 
     private boolean setWorldAnchor(ServerLevel server, BlockPos newOrigin, Rotation newRotation) {
-        if (!worldPosition.closerThan(newOrigin, MAX_BUILD_DISTANCE) || !fits(server, newOrigin, layout, newRotation)) return false;
+        if (!withinBuildDistance(newOrigin, layout) || !fits(server, newOrigin, layout, newRotation)) return false;
         anchored = true;
         origin = newOrigin;
         rotation = newRotation;
@@ -329,7 +389,7 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     }
 
     static void clientTick(Level level, BlockPos pos, BlockState block, PrinterEntity printer) {
-        boolean powered = printer.layout != null && printer.state != COMPLETE && level.hasNeighborSignal(pos);
+        boolean powered = printer.layout != null && printer.state != COMPLETE && printer.redstoneActive(level, pos);
         if (powered && !printer.clientPower)
             com.justenoughoritech.client.ProjectionController.offerPoweredPrinter(printer);
         printer.clientPower = powered;
@@ -337,66 +397,200 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
 
     static void tick(Level level, BlockPos pos, BlockState block, PrinterEntity printer) {
         if (!(level instanceof ServerLevel server) || printer.layout == null) return;
-        var owner = printer.owner == null ? null : server.getServer().getPlayerList().getPlayer(printer.owner);
-        if (owner != null && (owner.level() != server || !pos.closerToCenterThan(owner.position(), RANGE))) owner = null;
-        printer.inspect(server, owner);
+        var onlineOwner = printer.owner == null ? null : server.getServer().getPlayerList().getPlayer(printer.owner);
+        if (onlineOwner != null && onlineOwner.level() != server) onlineOwner = null;
+        printer.inspect(server, onlineOwner);
         if (printer.cursor >= printer.placements.size()) return;
-        if (!level.hasNeighborSignal(pos)) {
+        if (!printer.redstoneActive(level, pos)) {
             printer.state = WAITING;
             return;
         }
-        if (owner == null) {
-            printer.state = OWNER;
-            return;
+        ServerPlayer actor = printer.actingPlayer(server, onlineOwner);
+        boolean creative = onlineOwner != null && onlineOwner.isCreative();
+        boolean deconstruct = printer.operationMode == PrinterControlRequest.OperationMode.DECONSTRUCT;
+        int budget = blocksPerTick(printer.placements.size());
+        int scanCap = Math.max(budget * 4, 256);
+        int actions = 0, scanned = 0, progressed = 0;
+        boolean halted = false;
+        BlockPos lastEffectPos = null;
+        BlockState lastEffectState = null;
+
+        while (printer.cursor < printer.placements.size() && actions < budget && scanned < scanCap) {
+            scanned++;
+            if (deconstruct) {
+                int res = printer.stepDeconstruct(server, actor, onlineOwner, creative);
+                if (res < 0) {
+                    halted = true;
+                    break;
+                }
+                progressed++;
+                if (res > 0) {
+                    actions++;
+                    var donePlan = printer.placements.get(printer.placements.size() - printer.cursor);
+                    lastEffectPos = printer.anchor().offset(donePlan.x(), donePlan.y(), donePlan.z());
+                    lastEffectState = BuiltInRegistries.BLOCK.getValue(Identifier.parse(donePlan.blockId())).defaultBlockState();
+                }
+            } else {
+                BlockState placedState = printer.stepBuild(server, actor, onlineOwner, creative);
+                if (placedState == null) {
+                    halted = printer.state != PRINTING && printer.state != DECONSTRUCTING && printer.state != COMPLETE;
+                    if (halted) break;
+                    // MATCH skip: stepBuild already advanced cursor
+                    progressed++;
+                    continue;
+                }
+                if (placedState.isAir()) {
+                    // Sentinel: unexpected, handled above
+                    progressed++;
+                    continue;
+                }
+                progressed++;
+                actions++;
+                var donePlan = printer.placements.get(printer.cursor - 1);
+                lastEffectPos = printer.anchor().offset(donePlan.x(), donePlan.y(), donePlan.z());
+                lastEffectState = placedState;
+            }
         }
-        var plan = printer.placements.get(printer.cursor);
-        var where = printer.anchor().offset(plan.x(), plan.y(), plan.z());
-        if (!server.hasChunkAt(where) || !server.mayInteract(owner, where)) {
-            printer.state = OBSTRUCTED;
-            return;
+
+        if (lastEffectPos != null) {
+            emitEffect(server, pos, lastEffectPos, lastEffectState, deconstruct);
+        }
+        if (printer.cursor >= printer.placements.size()) {
+            printer.state = COMPLETE;
+            printer.resetInspection();
+            printer.sync();
+        } else if (progressed > 0) {
+            if (!halted) {
+                printer.state = deconstruct ? DECONSTRUCTING : PRINTING;
+            }
+            printer.setChanged();
+            level.updateNeighbourForOutputSignal(pos, block.getBlock());
+        }
+    }
+
+    /** Returns the placed BlockState if a block was placed, null when skipped (state==PRINTING) or halted (state==error). */
+    private BlockState stepBuild(ServerLevel server, ServerPlayer actor, ServerPlayer onlineOwner, boolean creative) {
+        var plan = placements.get(cursor);
+        var where = anchor().offset(plan.x(), plan.y(), plan.z());
+        if (!server.hasChunkAt(where) || !server.mayInteract(actor, where)) {
+            state = OBSTRUCTED;
+            return null;
         }
         var blockId = Identifier.tryParse(plan.blockId());
         if (blockId == null || !BuiltInRegistries.BLOCK.containsKey(blockId)) {
-            printer.state = OBSTRUCTED;
-            return;
+            state = OBSTRUCTED;
+            return null;
         }
         var build = BuiltInRegistries.BLOCK.getValue(blockId);
         if (server.getBlockState(where).is(build)) {
-            printer.advance();
-            return;
+            advanceCursor();
+            state = PRINTING;
+            return null;
         }
-        BlockState next = printer.oriented(build.defaultBlockState(), plan);
+        BlockState next = oriented(build.defaultBlockState(), plan);
         if (!server.isEmptyBlock(where) || !server.isUnobstructed(next, where, CollisionContext.empty())) {
-            printer.state = OBSTRUCTED;
-            return;
+            state = OBSTRUCTED;
+            return null;
         }
-
-        if (owner.isCreative()) {
-            if (place(server, owner, where, next)) printer.advance();
-            else printer.state = OBSTRUCTED;
-            return;
+        if (creative) {
+            if (place(server, actor, where, next)) {
+                advanceCursor();
+                return next;
+            }
+            state = OBSTRUCTED;
+            return null;
         }
-
-        // Adjacent storage feeds sustained jobs. The owner's main inventory is the fallback.
+        // Adjacent storage feeds sustained jobs at any distance; online owner inventory is the fallback.
         Item required = build.asItem();
         if (required == Items.AIR) {
-            printer.state = MATERIALS;
-            return;
+            state = MATERIALS;
+            return null;
         }
         try (var transaction = Transaction.openRoot()) {
-            boolean adjacent = printer.extractAdjacent(server, required, transaction);
-            int slot = adjacent ? -1 : findInInventory(owner.getInventory(), required);
+            boolean adjacent = extractAdjacent(server, required, transaction);
+            int slot = adjacent || onlineOwner == null ? -1 : findInInventory(onlineOwner.getInventory(), required);
             if (!adjacent && slot < 0) {
-                printer.state = MATERIALS;
-                return;
+                state = MATERIALS;
+                return null;
             }
-            if (!place(server, owner, where, next)) {
-                printer.state = OBSTRUCTED;
-                return;
+            if (!place(server, actor, where, next)) {
+                state = OBSTRUCTED;
+                return null;
             }
             transaction.commit();
-            if (slot >= 0) owner.getInventory().removeItem(slot, 1);
-            printer.advance();
+            if (slot >= 0) onlineOwner.getInventory().removeItem(slot, 1);
+            advanceCursor();
+            return next;
+        }
+    }
+
+    /** Returns 1 if removed, 0 if skipped (already gone), -1 if halted (obstructed / storage full). */
+    private int stepDeconstruct(ServerLevel server, ServerPlayer actor, ServerPlayer onlineOwner, boolean creative) {
+        int index = placements.size() - 1 - cursor;
+        var plan = placements.get(index);
+        var where = anchor().offset(plan.x(), plan.y(), plan.z());
+        if (!server.hasChunkAt(where) || !server.mayInteract(actor, where)) {
+            state = OBSTRUCTED;
+            return -1;
+        }
+        var blockId = Identifier.tryParse(plan.blockId());
+        if (blockId == null || !BuiltInRegistries.BLOCK.containsKey(blockId)) {
+            advanceCursor();
+            return 0;
+        }
+        var expected = BuiltInRegistries.BLOCK.getValue(blockId);
+        var current = server.getBlockState(where);
+        if (!current.is(expected)) {
+            advanceCursor();
+            return 0;
+        }
+        if (CommonHooks.fireBlockBreak(server, actor.gameMode(), actor, where, current).isCanceled()) {
+            state = OBSTRUCTED;
+            return -1;
+        }
+        if (creative) {
+            if (server.removeBlock(where, false)) {
+                advanceCursor();
+                return 1;
+            }
+            state = OBSTRUCTED;
+            return -1;
+        }
+        Item drop = expected.asItem();
+        if (drop == Items.AIR) {
+            state = OBSTRUCTED;
+            return -1;
+        }
+        try (var transaction = Transaction.openRoot()) {
+            boolean stored = insertAdjacent(server, drop, transaction);
+            boolean canGivePlayer = !stored && onlineOwner != null && canAcceptInventory(onlineOwner.getInventory(), drop);
+            if (!stored && !canGivePlayer) {
+                state = STORAGE_FULL;
+                return -1;
+            }
+            if (!server.removeBlock(where, false)) {
+                state = OBSTRUCTED;
+                return -1;
+            }
+            transaction.commit();
+            if (canGivePlayer) onlineOwner.getInventory().add(new ItemStack(drop));
+            advanceCursor();
+            return 1;
+        }
+    }
+
+    private static void emitEffect(ServerLevel server, BlockPos printerPos, BlockPos targetPos, BlockState state, boolean deconstruct) {
+        var sound = state.getSoundType();
+        var event = deconstruct ? sound.getBreakSound() : sound.getPlaceSound();
+        float pitch = 0.95f + server.getRandom().nextFloat() * 0.15f;
+        server.playSound(null, targetPos, event, SoundSource.BLOCKS, 0.45f, pitch);
+        var particle = new DustParticleOptions(deconstruct ? DISMANTLE_PARTICLE_COLOR : BUILD_PARTICLE_COLOR, 0.7f);
+        double sx = printerPos.getX() + 0.5, sy = printerPos.getY() + 1.0, sz = printerPos.getZ() + 0.5;
+        double tx = targetPos.getX() + 0.5, ty = targetPos.getY() + 0.5, tz = targetPos.getZ() + 0.5;
+        server.sendParticles(particle, tx, ty, tz, 2, 0.12, 0.12, 0.12, 0.0);
+        for (int step = 1; step <= 3; step++) {
+            double t = step / 4.0;
+            server.sendParticles(particle, sx + (tx - sx) * t, sy + (ty - sy) * t, sz + (tz - sz) * t, 1, 0.0, 0.0, 0.0, 0.0);
         }
     }
 
@@ -434,6 +628,24 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         return false;
     }
 
+    private boolean insertAdjacent(ServerLevel level, Item item, Transaction transaction) {
+        var resource = ItemResource.of(item);
+        for (var dir : Direction.values()) {
+            var handler = adjacentStorage(level, dir);
+            if (handler == null) continue;
+            if (handler.insert(resource, 1, transaction) == 1) return true;
+        }
+        return false;
+    }
+
+    private static boolean canAcceptInventory(Inventory inventory, Item item) {
+        for (int i = 0; i < 36; i++) {
+            var stack = inventory.getItem(i);
+            if (stack.isEmpty() || (stack.is(item) && stack.getCount() < stack.getMaxStackSize())) return true;
+        }
+        return false;
+    }
+
     private ResourceHandler<ItemResource> adjacentStorage(ServerLevel level, Direction direction) {
         var pos = worldPosition.relative(direction);
         return level.hasChunkAt(pos) ? level.getCapability(Capabilities.Item.BLOCK, pos, direction.getOpposite()) : null;
@@ -446,9 +658,15 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
     }
 
     private void inspect(ServerLevel level, ServerPlayer owner) {
-        if (level.getGameTime() < nextInspection || (owner == null &&
-                level.getNearestPlayer(worldPosition.getX() + .5, worldPosition.getY() + .5, worldPosition.getZ() + .5, 48, false) == null))
+        if (level.getGameTime() < nextInspection)
             return;
+        if (operationMode == PrinterControlRequest.OperationMode.DECONSTRUCT) {
+            report = new PrinterReport(worldPosition, anchor(), null, false, List.of());
+            PacketDistributor.sendToPlayersTrackingChunk(level, ChunkPos.containing(worldPosition), report);
+            inspection = null;
+            nextInspection = level.getGameTime() + 20;
+            return;
+        }
         if (inspection == null) inspection = new BuildInspection(placements, anchor(), cursor);
         if (!inspection.scan(level, 2048, false)) return;
         var remaining = inspection.required();
@@ -490,20 +708,17 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         return -1;
     }
 
-    private void advance() {
+    private void advanceCursor() {
         if (inspection != null) inspection.placed(cursor);
         cursor++;
-        state = cursor == placements.size() ? COMPLETE : PRINTING;
-        if (state == COMPLETE) {
-            resetInspection();
-            sync();
-        } else setChanged();
     }
 
     private void sync() {
         setChanged();
-        if (level instanceof ServerLevel server)
+        if (level instanceof ServerLevel server) {
+            server.updateNeighbourForOutputSignal(worldPosition, getBlockState().getBlock());
             server.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
+        }
     }
 
     @Override
@@ -531,6 +746,8 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         output.putInt("dy", dy);
         output.putInt("dz", dz);
         output.putInt("progress", cursor);
+        output.putString("redstone_mode", redstoneMode.name());
+        output.putString("operation_mode", operationMode.name());
     }
 
     @Override
@@ -555,10 +772,25 @@ public final class PrinterEntity extends BlockEntity implements MenuProvider {
         dx = Math.clamp(input.getIntOr("dx", 0), -SHIFT, SHIFT);
         dy = Math.clamp(input.getIntOr("dy", 0), -SHIFT, SHIFT);
         dz = Math.clamp(input.getIntOr("dz", 0), -SHIFT, SHIFT);
+        redstoneMode = parseEnum(PrinterControlRequest.RedstoneMode.class,
+                input.getStringOr("redstone_mode", PrinterControlRequest.RedstoneMode.HIGH.name()),
+                PrinterControlRequest.RedstoneMode.HIGH);
+        operationMode = parseEnum(PrinterControlRequest.OperationMode.class,
+                input.getStringOr("operation_mode", PrinterControlRequest.OperationMode.BUILD.name()),
+                PrinterControlRequest.OperationMode.BUILD);
         layout = blueprint == null || origin == null ? null : blueprint.resolve(PrinterLayout.LIMIT);
         placements = layout == null ? List.of() : layout.placements(rotation, mirror);
         cursor = Math.clamp(input.getIntOr("progress", 0), 0, placements.size());
         state = layout == null ? IDLE : cursor == placements.size() ? COMPLETE : WAITING;
+    }
+
+    private static <E extends Enum<E>> E parseEnum(Class<E> type, String name, E fallback) {
+        if (name == null || name.isBlank()) return fallback;
+        try {
+            return Enum.valueOf(type, name);
+        } catch (IllegalArgumentException ignored) {
+            return fallback;
+        }
     }
 
     @Override

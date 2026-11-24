@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.0 — Oritech UI Redesign, Translucent Ghosts, Blueprint Bench & Mega-Reactors
+
+Just Enough Oritech by **NiceClown**.
+
+Version **1.0.0** completely rebuilds every mod GUI and block texture around Oritech's industrial design language, replaces wireframe-only projections with real translucent Oritech block ghosts, introduces a server-backed Blueprint Drafting Table with your full inventory, unlocks full 360° trackball orbit and wheel zoom in all 3D previews, scales up to 256×256×256 mega-reactors with linear 3D Printer speed scaling, and lets the 3D Printer operate autonomously in any loaded chunk.
+
+### Visual overhaul, 16×16 textures & mixin hardening
+
+- **Unified Oritech industrial UI** (`OritechTheme`, `OritechButton`, `TextViewport`): rebuilt `SimulatorWidget`, `PrinterScreen`, `AutoDesignScreen`, `LayoutToolsScreen`, `BlueprintLibraryScreen`, and `BlueprintBenchScreen` with crisp Oritech panels, dark insets, orange trim, and clean dark-on-light typography without double shadow blur.
+- **Crisp 16×16 assets**: replaced all legacy 32×32 textures with pixel-aligned **16×16** assets (`reactor_printer_{front,side,top,bottom}.png` and `reactor_blueprint.png`) and directional blockstates (`north`/`east`/`south`/`west`) so the mod never causes texture shimmer in modpacks.
+- **Mixin hardening**: updated `just_enough_oritech.mixins.json` (`JAVA_25`, `overwrites.requireAnnotations = true`) and `KeyboardHandlerMixin` with explicit descriptor targeting and null guards.
+
+### Translucent ghost blocks & interactive JEI simulator
+
+- **Real translucent Oritech ghost blocks in world (`ProjectionController`)**: renders actual baked Oritech block models (`RenderTypes.entityTranslucent`) sorted back-to-front for builds up to 4,096 placements (skipping blocks already placed correctly and highlighting obstructions in red), falling back cleanly to color wireframes (`4,097–12,000`) and outer prisms + controller highlights above `12,000`.
+- **Blueprint Drafting Table (`BlueprintBenchMenu`, `BlueprintBenchScreen`)**: clicking **Write Blueprint** in JEI opens a server-backed crafting container with your full 36-slot player inventory, blueprint name editor, world anchor toggle, real **Paper** input slot, and **Reactor Blueprint** result slot (Shift-click crafts one blueprint at a time cleanly in Survival or Creative).
+- **Selected Part Icon Slot & Warcraft-3 box selection (`SimulatorWidget`)**: shows the active Oritech block item in an inventory slot between `<` and `>` (click or scroll to cycle) and supports click-and-drag rectangular fill (LMB) and rectangular clear (RMB) on the 5×5 core grid.
+- **360° Trackball Orbit, Scroll Zoom & Enhanced 3D Thermal Heatmap (`T°`)**: full quaternion 360° rotation (`LMB` drag), `0.4×–4.0×` mouse-wheel zoom on hover, and `RMB` view reset in all 3D previews (`SimulatorWidget`, `BlueprintBenchScreen`, `PrinterScreen`). Clicking **`T°`** auto-starts simulation if stopped, hides outer casing walls, and draws a continuous green-to-red thermal gradient with translucent glow overlays and peak heat readout.
+- **Blueprint Library & World Scanner**: includes 4 verified steady built-in presets (`Starter Passive`, `Balanced Passive`, `Active Ice Core`, and a re-tuned non-overheating `Compact High Output` `7×7×8` design at `49,152 RF/t`), local saved library (`config/just_enough_oritech/blueprints.json`), and a **Scan** world reactor reader (`Shift + right-click` a Reactor Controller or click **Scan** in JEI).
+
+### Autonomous 3D Printer 2.0, Mega-Reactors & Jade HUD
+
+- **No 32-block player radius restriction (`PrinterEntity`)**: the Reactor 3D Printer now builds and dismantles autonomously in any loaded chunk (even while the owner is far away, in another dimension, or offline) using adjacent item storage first and owner `FakePlayer` claim context for land-protection compatibility; if the owner is online in the same dimension, player inventory fallback and Creative mode continue to work at any distance. `SET_ANCHOR` packet range increased to 256 blocks (`PrinterControlRequest`).
+- **Linear build/dismantle speed scaling (`≤ 3 minutes` for vanilla `66×66×66` max)**: `PrinterControlRequest.blocksPerTick` scales from `1 block/tick` (`≤ 3,600` blocks) linearly up to **`512 blocks/tick`** — a maximum vanilla `66×66×66` reactor (`287,496` blocks) runs at **`80 blocks/tick`** and completes within **3 minutes**.
+- **Mega-reactor support up to `256×256×256`**: raised `PrinterLayout.LIMIT` and `ReactorDesigner.growthLimit` from `64` to `256`, packed `PrinterMenu` progress/total `DataSlot`s to 32-bit, switched `ReactorLayout.blockCounts()` to `long`, and made 3D UI previews `O(surface)`. *(Note: Oritech's own server config `config/oritech-common.toml` defaults `maxSize = 66` (`64` interior), so servers wanting world reactors larger than `66` must raise `maxSize` there.)*
+- **Keep screen open on world projection**: toggling **Show proj.** inside `PrinterScreen` keeps the GUI open.
+- **Redstone modes, Reverse Dismantle, Comparator & Jade HUD**: added 3 redstone modes (`RS: High` / `RS: Low` / `RS: On`), reverse **Dismantle** mode returning blocks to adjacent storage/owner, `0..15` comparator output, clickable JEI recipe lookups in Missing Materials, and optional **Jade** HUD integration (`JEOJadePlugin`).
+
+### Verification
+
+- **162 / 162** JUnit 5 tests passing across 19 test suites (including 100M+ RF/t mega-reactor simulation, all 4 built-in presets reaching `STEADY` under both Default and FTB configs, linear printer speed scaling, blueprint bench codecs, and 32-bit `PrinterMenu`).
+- End-to-end verified in live MC `26.1.2` clients with `0` mod/Mixin/Jade errors across:
+  - Standalone Oritech `2.0.0-exp12` (**87 / 87** checks),
+  - **All the Mods 11** (**301 mods**, Sodium/Iris/Jade, Oritech `exp12`, **68 / 68** checks),
+  - **FTB Evolution 2** (**437 mods**, Jade/`oritechthings`/`applied_oritech`, Oritech `exp14`, **68 / 68** checks).
+  All three E2E runs verified remote autonomous printing at **48 blocks** distance, live world Nuclear Reactor Controller activation, and complete block recovery on Dismantle.
+
 ## 0.6.0 — Reactor Blueprints and 3D Printer overhaul
 
 Just Enough Oritech by **NiceClown**.
