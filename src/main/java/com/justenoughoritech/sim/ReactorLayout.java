@@ -2,6 +2,7 @@ package com.justenoughoritech.sim;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 
 import java.util.Arrays;
@@ -88,6 +89,44 @@ public final class ReactorLayout {
 
     public record Placement(int x, int y, int z, String blockId) {}
 
+    public record Orientation(Rotation rotation, Mirror mirror) {
+        public Orientation {
+            rotation = rotation == null ? Rotation.NONE : rotation;
+            mirror = canonicalMirror(mirror);
+        }
+
+        public static Mirror canonicalMirror(Mirror mirror) {
+            return mirror == Mirror.FRONT_BACK ? Mirror.FRONT_BACK : Mirror.NONE;
+        }
+
+        public Orientation rotated(int steps) {
+            int count = Math.floorMod(steps, 4);
+            Rotation next = rotation;
+            for (int i = 0; i < count; i++) next = next.getRotated(Rotation.CLOCKWISE_90);
+            return new Orientation(next, mirror);
+        }
+
+        public Orientation flippedWorldX() {
+            Mirror flipped = mirror == Mirror.FRONT_BACK ? Mirror.NONE : Mirror.FRONT_BACK;
+            Rotation next = switch (rotation) {
+                case CLOCKWISE_90 -> Rotation.COUNTERCLOCKWISE_90;
+                case COUNTERCLOCKWISE_90 -> Rotation.CLOCKWISE_90;
+                default -> rotation;
+            };
+            return new Orientation(next, flipped);
+        }
+
+        public Orientation flippedWorldZ() {
+            Mirror flipped = mirror == Mirror.FRONT_BACK ? Mirror.NONE : Mirror.FRONT_BACK;
+            Rotation next = switch (rotation) {
+                case NONE -> Rotation.CLOCKWISE_180;
+                case CLOCKWISE_180 -> Rotation.NONE;
+                default -> rotation;
+            };
+            return new Orientation(next, flipped);
+        }
+    }
+
     public int buildWidth(Rotation rotation) {
         return rotation.rotate(Direction.EAST).getAxis()==Direction.Axis.X ? width : length;
     }
@@ -107,15 +146,48 @@ public final class ReactorLayout {
         };
     }
 
+    /** Center the outer shell flush against the selected face of a printer block. */
+    public BlockPos faceOrigin(BlockPos printerPos, Direction face, Rotation rotation) {
+        int outerW = buildWidth(rotation) + 2;
+        int outerH = height + 2;
+        int outerL = buildLength(rotation) + 2;
+        int halfW = outerW / 2;
+        int halfL = outerL / 2;
+        return switch (face == null ? Direction.UP : face) {
+            case UP -> printerPos.offset(-halfW, 1, -halfL);
+            case DOWN -> printerPos.offset(-halfW, -outerH, -halfL);
+            case NORTH -> printerPos.offset(-halfW, 0, -outerL);
+            case SOUTH -> printerPos.offset(-halfW, 0, 1);
+            case WEST -> printerPos.offset(-outerW, 0, -halfL);
+            case EAST -> printerPos.offset(1, 0, -halfL);
+        };
+    }
+
+    public Direction controllerFacing(Rotation rotation, Mirror mirror) {
+        int rotatedWidth = buildWidth(rotation);
+        for (var block : placements(rotation, mirror)) {
+            if (CONTROLLER.equals(block.blockId())) return wallFacing(block, rotatedWidth);
+        }
+        return Direction.WEST;
+    }
+
     public List<Placement> placements(Rotation rotation) {
-        var base=placements();
-        if (rotation==Rotation.NONE) return base;
-        // Preserve the build order across rotations so obstruction checks and printing agree.
-        return base.stream().map(block -> switch (rotation) {
-            case CLOCKWISE_90 -> new Placement(length+1-block.z(),block.y(),block.x(),block.blockId());
-            case CLOCKWISE_180 -> new Placement(width+1-block.x(),block.y(),length+1-block.z(),block.blockId());
-            case COUNTERCLOCKWISE_90 -> new Placement(block.z(),block.y(),width+1-block.x(),block.blockId());
-            case NONE -> block;
+        return placements(rotation, Mirror.NONE);
+    }
+
+    public List<Placement> placements(Rotation rotation, Mirror mirror) {
+        var base = placements();
+        if (rotation == Rotation.NONE && mirror == Mirror.NONE) return base;
+        // Preserve the build order across transforms so obstruction checks and printing agree.
+        return base.stream().map(block -> {
+            int mx = mirror == Mirror.FRONT_BACK ? width + 1 - block.x() : block.x();
+            int mz = mirror == Mirror.LEFT_RIGHT ? length + 1 - block.z() : block.z();
+            return switch (rotation) {
+                case CLOCKWISE_90 -> new Placement(length + 1 - mz, block.y(), mx, block.blockId());
+                case CLOCKWISE_180 -> new Placement(width + 1 - mx, block.y(), length + 1 - mz, block.blockId());
+                case COUNTERCLOCKWISE_90 -> new Placement(mz, block.y(), width + 1 - mx, block.blockId());
+                case NONE -> new Placement(mx, block.y(), mz, block.blockId());
+            };
         }).toList();
     }
 

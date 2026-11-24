@@ -39,13 +39,15 @@ public final class JustEnoughOritech {
     }
 
     private void registerPayloads(RegisterPayloadHandlersEvent event) {
-        var registrar=event.registrar("0.4.0");
+        var registrar=event.registrar("0.6.0");
         registrar.playToClient(ReactorConfigPayload.TYPE, ReactorConfigPayload.STREAM_CODEC,
                 ReactorConfigPayload::handleClient);
         registrar.playToClient(com.justenoughoritech.printer.PrinterReport.TYPE,
                 com.justenoughoritech.printer.PrinterReport.CODEC,com.justenoughoritech.printer.PrinterReport::receive);
-        registrar.playToServer(com.justenoughoritech.printer.PrintRequest.TYPE,
-                com.justenoughoritech.printer.PrintRequest.CODEC, com.justenoughoritech.printer.PrintRequest::receive);
+        registrar.playToServer(com.justenoughoritech.printer.WriteBlueprintRequest.TYPE,
+                com.justenoughoritech.printer.WriteBlueprintRequest.CODEC, com.justenoughoritech.printer.WriteBlueprintRequest::receive);
+        registrar.playToServer(com.justenoughoritech.printer.PrinterControlRequest.TYPE,
+                com.justenoughoritech.printer.PrinterControlRequest.CODEC, com.justenoughoritech.printer.PrinterControlRequest::receive);
     }
 
     private void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {

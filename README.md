@@ -25,9 +25,15 @@ Both client and server need this addon. At login, and again after a datapack rel
 
 ## Reactor 3D printer
 
-Craft one from steel ingots (`#c:ingots/steel`), motors, a tier-three machine core, a processing unit, and a dispenser. It is also available in the Redstone creative tab. Start Preview in JEI, aim at any face of the desired printer and lock the projection. Return to JEI and send the layout to that printer. Open its menu to drag and rotate the 3D model, move the build along X, Y and Z before printing starts, show the world projection or cancel the job. The printer item and the menu's help icon show these steps.
+Craft one from steel ingots (`#c:ingots/steel`), motors, a tier-three machine core, a processing unit, and a dispenser. It is also available in the Redstone creative tab.
 
-The printer builds while powered by redstone and its owner is within 32 blocks. It uses adjacent item storage first, then the owner's main inventory. Matching blocks already in place are skipped. An obstruction or unavailable material pauses the job. Switching off redstone pauses it, and cancelling keeps the blocks already placed. The maximum printable interior is 64 blocks along each axis, subject to Oritech's own size limit. The printer saves its job with the world. Its menu lists the blocks still missing after counting extractable adjacent items and the nearby owner's inventory. The projection outlines the first obstructing block in red.
+1. **Write a Reactor Blueprint**: open the JEI Reactor Simulator (`K`), design a reactor, place vanilla Paper into the floating **Blueprint** card beside the simulator (consumed in Survival, free in Creative), and click the write arrow (`→`).
+2. **Choose placement (two paths)**:
+   - *Path 1 (Pre-anchored)*: use **Set in world** (or **Preview** + `R` to rotate, `Y` to lock) before writing the blueprint to embed the exact world position and orientation.
+   - *Path 2 (Auto-placed)*: write the blueprint right away and insert it into the 3D Printer's blueprint slot — the printer automatically places the projection flush above its **Top** face.
+3. **Adjust in the 3D Printer menu**: drag the 3D preview to inspect the build, switch the attach side (`Top`/`Bottom`/`North`/`South`/`East`/`West`/`Anchored`), rotate 90° (`↺`/`↻`), mirror (`Flip X`/`Flip Z`), nudge `X`/`Y`/`Z` (`±1`, Shift `±10`, Ctrl `±50`), re-aim in the world, toggle the world hologram (`Show proj.` / `Hide proj.`), reset offsets, or restart progress. Removing the blueprint clears the active job without breaking placed blocks; breaking the printer drops the blueprint.
+
+The printer builds while powered by redstone and its owner is within 32 blocks. It uses adjacent item storage first, then the owner's main inventory. Matching blocks already in place are skipped. An obstruction or unavailable material pauses the job, and switching off redstone pauses it. The maximum printable interior is 64 blocks along each axis, subject to Oritech's own size limit. The printer saves its blueprint and progress with the world, lists missing materials after counting extractable adjacent items and the owner's inventory, and outlines the first obstructing block in red.
 
 ## Build
 

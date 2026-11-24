@@ -2,6 +2,7 @@ package com.justenoughoritech.sim;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -386,5 +387,106 @@ class ReactorLayoutTest {
         assertEquals(12, layout.energyPorts());
         assertEquals(SINGLE, layout.get(3, 4));
         assertNotEquals(SINGLE, layout.get(1, 0));
+    }
+
+    @Test
+    void dihedralOrientationAndMirroredPlacementsPreserveValidShellAndControllerFacing() {
+        var layout = new ReactorLayout();
+        layout.resize(2, 5, 64);
+        layout.setHeight(3, 64);
+        layout.setEnergyPorts(4);
+        layout.set(0, 0, SINGLE);
+        layout.set(1, 4, ABSORBER);
+
+        var distinctControllerPositions = new java.util.HashSet<String>();
+        for (Rotation rot : Rotation.values()) {
+            for (Mirror mirror : new Mirror[]{Mirror.NONE, Mirror.FRONT_BACK}) {
+                var o = new ReactorLayout.Orientation(rot, mirror);
+                assertEquals(o, o.flippedWorldX().flippedWorldX(), "flipWorldX must be an involution for " + o);
+                assertEquals(o, o.flippedWorldZ().flippedWorldZ(), "flipWorldZ must be an involution for " + o);
+                assertEquals(o, o.rotated(1).rotated(1).rotated(1).rotated(1));
+                assertEquals(o, o.rotated(1).rotated(-1));
+
+                int bw = layout.buildWidth(rot);
+                int bl = layout.buildLength(rot);
+                var placed = layout.placements(rot, mirror);
+                assertEquals(layout.placements().size(), placed.size());
+
+                // Verify flipWorldX mirrors exact X coords into w+1-x without altering Y or Z.
+                var fx = o.flippedWorldX();
+                var fxPlaced = layout.placements(fx.rotation(), fx.mirror());
+                var expectedFx = placed.stream()
+                        .map(p -> p.y() + ":" + (bw + 1 - p.x()) + ":" + p.z() + ":" + p.blockId())
+                        .collect(java.util.stream.Collectors.toSet());
+                var actualFx = fxPlaced.stream()
+                        .map(p -> p.y() + ":" + p.x() + ":" + p.z() + ":" + p.blockId())
+                        .collect(java.util.stream.Collectors.toSet());
+                assertEquals(expectedFx, actualFx, "flipWorldX must mirror exact world X placements for " + o);
+
+                // Verify flipWorldZ mirrors exact Z coords into l+1-z without altering X or Y.
+                var fz = o.flippedWorldZ();
+                var fzPlaced = layout.placements(fz.rotation(), fz.mirror());
+                var expectedFz = placed.stream()
+                        .map(p -> p.y() + ":" + p.x() + ":" + (bl + 1 - p.z()) + ":" + p.blockId())
+                        .collect(java.util.stream.Collectors.toSet());
+                var actualFz = fzPlaced.stream()
+                        .map(p -> p.y() + ":" + p.x() + ":" + p.z() + ":" + p.blockId())
+                        .collect(java.util.stream.Collectors.toSet());
+                assertEquals(expectedFz, actualFz, "flipWorldZ must mirror exact world Z placements for " + o);
+
+                // Controller and energy ports lie strictly on side walls and face outward.
+                var facing = layout.controllerFacing(rot, mirror);
+                int controllers = 0;
+                for (var p : placed) {
+                    if (ReactorLayout.CONTROLLER.equals(p.blockId())) {
+                        controllers++;
+                        assertEquals(facing, ReactorLayout.wallFacing(p, bw));
+                        distinctControllerPositions.add(p.x() + "," + p.z());
+                    }
+                    if (ReactorLayout.CONTROLLER.equals(p.blockId()) || ReactorLayout.ENERGY_PORT.equals(p.blockId())) {
+                        assertTrue(ReactorLayout.onShell(p, bw, layout.height(), bl));
+                        BlockPos outside = new BlockPos(p.x(), p.y(), p.z()).relative(ReactorLayout.wallFacing(p, bw));
+                        assertTrue(outside.getX() < 0 || outside.getX() > bw + 1
+                                || outside.getZ() < 0 || outside.getZ() > bl + 1);
+                    }
+                }
+                assertEquals(1, controllers);
+            }
+        }
+        assertEquals(8, distinctControllerPositions.size(), "All 8 D4 symmetries should move the asymmetric controller");
+    }
+
+    @Test
+    void faceOriginCentersFlushAgainstAllSixPrinterFacesWithoutOverlap() {
+        var layout = new ReactorLayout();
+        layout.resize(3, 5, 64);
+        layout.setHeight(4, 64);
+        var printer = new BlockPos(100, 70, -50);
+
+        for (Direction face : Direction.values()) {
+            for (Rotation rot : Rotation.values()) {
+                int outerW = layout.buildWidth(rot) + 2;
+                int outerH = layout.height() + 2;
+                int outerL = layout.buildLength(rot) + 2;
+                var origin = layout.faceOrigin(printer, face, rot);
+                int minX = origin.getX(), maxX = minX + outerW - 1;
+                int minY = origin.getY(), maxY = minY + outerH - 1;
+                int minZ = origin.getZ(), maxZ = minZ + outerL - 1;
+
+                boolean inside = printer.getX() >= minX && printer.getX() <= maxX
+                        && printer.getY() >= minY && printer.getY() <= maxY
+                        && printer.getZ() >= minZ && printer.getZ() <= maxZ;
+                assertFalse(inside, "Reactor must never overlap printer block for face=" + face + " rot=" + rot);
+
+                switch (face) {
+                    case UP -> assertEquals(printer.getY() + 1, minY);
+                    case DOWN -> assertEquals(printer.getY() - 1, maxY);
+                    case NORTH -> assertEquals(printer.getZ() - 1, maxZ);
+                    case SOUTH -> assertEquals(printer.getZ() + 1, minZ);
+                    case WEST -> assertEquals(printer.getX() - 1, maxX);
+                    case EAST -> assertEquals(printer.getX() + 1, minX);
+                }
+            }
+        }
     }
 }

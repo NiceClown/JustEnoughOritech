@@ -1,10 +1,15 @@
 package com.justenoughoritech.client;
 
+import com.justenoughoritech.printer.BlueprintData;
+import com.justenoughoritech.printer.PrinterContent;
+import com.justenoughoritech.printer.PrinterLayout;
+import com.justenoughoritech.printer.WriteBlueprintRequest;
 import com.justenoughoritech.sim.ReactorLayout;
 import com.justenoughoritech.sim.ReactorParts;
 import com.justenoughoritech.sim.ReactorSimulation;
 import mezz.jei.api.gui.builder.ITooltipBuilder;
 import mezz.jei.api.gui.widgets.IRecipeWidget;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenPosition;
@@ -14,8 +19,11 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,12 +31,15 @@ import java.util.Map;
 import java.util.function.IntConsumer;
 
 public final class SimulatorWidget implements IRecipeWidget {
-    private static final int W = 420, H = 230, CELL = 17, GX = 6, GY = 40, GRID = 5;
+    private static final int MAIN_W = 420, CARD_X = 426, CARD_Y = 28, CARD_W = 88, CARD_H = 176;
+    private static final int W = CARD_X + CARD_W, H = 230, CELL = 17, GX = 6, GY = 40, GRID = 5;
+    private static final int PAPER_X = CARD_X + 7, SLOT_Y = CARD_Y + 20, ARROW_X = CARD_X + 31, OUT_X = CARD_X + 61;
     private static final int LIST_TOP = 165, LIST_HEIGHT = 59, LIST_ROWS = 5;
-    private static final int EYE_X=244, EYE_Y=29;
-    private static final int LIGHT = 0xFFF1F3F5, MUTED = 0xFFB8C4D0, ALERT = 0xFFFF8176;
-    private static final int COOL=0xFF418C50, WARM=0xFFBE9D3D, HOT=0xFFFF414A, SELECTED=0xFFFFDA66;
-    private static final int WARM_THRESHOLD=65, HOT_THRESHOLD=100;
+    private static final int EYE_X = 244, EYE_Y = 29;
+    private static final int LIGHT = 0xFFF1F3F5, MUTED = 0xFFB8C4D0, ALERT = 0xFFFF8176, OK = 0xFF89D39D;
+    private static final int COOL = 0xFF418C50, WARM = 0xFFBE9D3D, HOT = 0xFFFF414A, SELECTED = 0xFFFFDA66;
+    private static final int WARM_THRESHOLD = 65, HOT_THRESHOLD = 100;
+    private static final Identifier SLOT_SPRITE = Identifier.withDefaultNamespace("container/slot");
     private static final Workbench WB = Workbench.INSTANCE;
     private static final Identifier BUTTON = Identifier.withDefaultNamespace("widget/button");
     private static final Identifier HOVER = Identifier.withDefaultNamespace("widget/button_highlighted");
@@ -126,11 +137,12 @@ public final class SimulatorWidget implements IRecipeWidget {
     }
 
     private void drawEditor(GuiGraphicsExtractor g) {
-        g.fill(0,0,W,H,0xFF20252B);
-        g.fill(2,28,104,228,0xFF293039);
-        g.fill(106,28,262,228,0xFF252B32);
-        g.fill(264,28,418,228,0xFF293039);
-        text(g,4,4,410,Component.translatable("jei.just_enough_oritech.reactor.title"),LIGHT);
+        g.fill(0, 0, MAIN_W, H, 0xFF20252B);
+        g.outline(0, 0, MAIN_W, H, 0xFF44515D);
+        g.fill(2, 28, 104, 228, 0xFF293039);
+        g.fill(106, 28, 262, 228, 0xFF252B32);
+        g.fill(264, 28, 418, 228, 0xFF293039);
+        text(g, 4, 4, 410, Component.translatable("jei.just_enough_oritech.reactor.title"), LIGHT);
         var snapshot = ClientRuntimeConfig.snapshot();
         var compatibility = ClientRuntimeConfig.compatibility();
         Component status = switch (compatibility) {
@@ -139,22 +151,22 @@ public final class SimulatorWidget implements IRecipeWidget {
             case UNVERIFIED -> Component.empty().append(tr("unverified")).append(" ").append(snapshot.oritechVersion());
             case INCOMPATIBLE -> tr("incompatible", issueText(ClientRuntimeConfig.runtimeIssue()));
         };
-        text(g,4,16,128,status, compatibility == ClientRuntimeConfig.Compatibility.VERIFIED ? 0xFF89D39D : ALERT);
+        text(g, 4, 16, 128, status, compatibility == ClientRuntimeConfig.Compatibility.VERIFIED ? OK : ALERT);
         drawHeatLegend(g);
 
-        text(g,GX,30,96,tr("interior",WB.layout.width(),WB.layout.length()),LIGHT);
+        text(g, GX, 30, 96, tr("interior", WB.layout.width(), WB.layout.length()), LIGHT);
         drawGrid(g);
         var selected = WB.selected().block();
-        text(g,GX,127,96,tr("selected",selected == null ? tr("empty") : selected.getName()),LIGHT);
-        text(g,GX,192,96,tr("layer_number",WB.selectedLayer+1,WB.layout.height()),MUTED);
-        text(g,GX,203,96,tr("ports",WB.layout.energyPorts()),MUTED);
+        text(g, GX, 127, 96, tr("selected", selected == null ? tr("empty") : selected.getName()), LIGHT);
+        text(g, GX, 192, 96, tr("layer_number", WB.selectedLayer + 1, WB.layout.height()), MUTED);
+        text(g, GX, 203, 96, tr("ports", WB.layout.energyPorts()), MUTED);
 
-        text(g,110,31,70,tr(WB.layersMode ? "preview_layer" : "preview_3d"),LIGHT);
-        int editWidth=Math.min(GRID,WB.layout.width()-WB.gridOffsetX);
-        int editLength=Math.min(GRID,WB.layout.length()-WB.gridOffsetZ);
-        text(g,110,43,148,tr("edit_area_coords",WB.gridOffsetX+1,WB.gridOffsetX+editWidth,
-                WB.gridOffsetZ+1,WB.gridOffsetZ+editLength),MUTED);
-        int layer = WB.layersMode ? WB.selectedLayer+1 : -1;
+        text(g, 110, 31, 70, tr(WB.layersMode ? "preview_layer" : "preview_3d"), LIGHT);
+        int editWidth = Math.min(GRID, WB.layout.width() - WB.gridOffsetX);
+        int editLength = Math.min(GRID, WB.layout.length() - WB.gridOffsetZ);
+        text(g, 110, 43, 148, tr("edit_area_coords", WB.gridOffsetX + 1, WB.gridOffsetX + editWidth,
+                WB.gridOffsetZ + 1, WB.gridOffsetZ + editLength), MUTED);
+        int layer = WB.layersMode ? WB.selectedLayer + 1 : -1;
         if (previewRevision != WB.revision()) {
             blueprint = WB.layout.placements();
             previewRevision = WB.revision();
@@ -162,26 +174,92 @@ public final class SimulatorWidget implements IRecipeWidget {
         }
         if (previewLayer != layer) {
             previewLayer = layer;
-            preview = layer>=0 ? blueprint.stream().filter(block -> block.y()==layer).toList()
-                    : AssemblyPreview.shell(blueprint,WB.layout.width(),WB.layout.height(),WB.layout.length());
+            preview = layer >= 0 ? blueprint.stream().filter(block -> block.y() == layer).toList()
+                    : AssemblyPreview.shell(blueprint, WB.layout.width(), WB.layout.height(), WB.layout.length());
         }
-        var editArea=WB.showEditArea ? new AssemblyPreview.EditArea(WB.gridOffsetX+1,WB.gridOffsetZ+1,
-                editWidth,editLength,WB.selectedLayer+2) : null;
-        AssemblyPreview.draw(g,preview,WB.layout.width(),WB.layout.height(),WB.layout.length(),layer,WB.simulation,
-                editArea,AssemblyPreview.DEFAULT_PITCH,AssemblyPreview.DEFAULT_YAW,109,53,150,102);
-        text(g,110,157,148,tr("heat_history"),MUTED);
+        var editArea = WB.showEditArea ? new AssemblyPreview.EditArea(WB.gridOffsetX + 1, WB.gridOffsetZ + 1,
+                editWidth, editLength, WB.selectedLayer + 2) : null;
+        AssemblyPreview.draw(g, preview, WB.layout.width(), WB.layout.height(), WB.layout.length(), layer, WB.simulation,
+                editArea, AssemblyPreview.DEFAULT_PITCH, AssemblyPreview.DEFAULT_YAW, 109, 53, 150, 102);
+        text(g, 110, 157, 148, tr("heat_history"), MUTED);
         drawHeatGraph(g);
-        if (WB.designStatus != null) paragraph(g,110,190,148,2,WB.designStatus,MUTED);
+        if (WB.designStatus != null) paragraph(g, 110, 190, 148, 2, WB.designStatus, MUTED);
 
         var fuel = WB.inputs.fuels().isEmpty() ? null
                 : WB.inputs.fuels().get(Math.floorMod(WB.selectedFuel, WB.inputs.fuels().size()));
         var coolant = WB.inputs.coolants().isEmpty() ? ItemStack.EMPTY
                 : WB.inputs.coolants().get(Math.floorMod(WB.selectedCoolant, WB.inputs.coolants().size()));
-        resource(g,30,"fuel",fuel == null ? ItemStack.EMPTY : fuel.item());
-        text(g,270,67,141,fuel == null ? tr("none") : tr("fuel_ticks",fuel.duration()),MUTED);
-        resource(g,79,"coolant",coolant);
+        resource(g, 30, "fuel", fuel == null ? ItemStack.EMPTY : fuel.item());
+        text(g, 270, 67, 141, fuel == null ? tr("none") : tr("fuel_ticks", fuel.duration()), MUTED);
+        resource(g, 79, "coolant", coolant);
         if (WB.blocksMode) drawBlockList(g);
-        else drawReport(g,compatibility);
+        else drawReport(g, compatibility);
+        drawBlueprintCard(g, compatibility);
+    }
+
+    private void drawBlueprintCard(GuiGraphicsExtractor g, ClientRuntimeConfig.Compatibility compatibility) {
+        boolean creative = isCreative();
+        int paperCount = countPlayerPaper();
+        if (WB.paperStaged && !creative && paperCount == 0) WB.paperStaged = false;
+
+        g.fill(CARD_X, CARD_Y, CARD_X + CARD_W, CARD_Y + CARD_H, 0xFF293039);
+        g.fill(CARD_X + 1, CARD_Y + 1, CARD_X + CARD_W - 1, CARD_Y + 15, 0xFF20252B);
+        g.outline(CARD_X, CARD_Y, CARD_W, CARD_H, 0xFF768494);
+        text(g, CARD_X + 5, CARD_Y + 4, CARD_W - 10, tr("blueprint_card"), LIGHT);
+
+        g.blitSprite(RenderPipelines.GUI_TEXTURED, SLOT_SPRITE, PAPER_X, SLOT_Y, 18, 18);
+        var paperStack = new ItemStack(Items.PAPER);
+        g.fakeItem(paperStack, PAPER_X + 1, SLOT_Y + 1);
+        if (WB.paperStaged) g.outline(PAPER_X, SLOT_Y, 18, 18, OK);
+        else g.fill(PAPER_X + 1, SLOT_Y + 1, PAPER_X + 17, SLOT_Y + 17, 0xAA232930);
+
+        g.blitSprite(RenderPipelines.GUI_TEXTURED, SLOT_SPRITE, OUT_X, SLOT_Y, 18, 18);
+        var errors = layoutErrors();
+        boolean valid = compatibility != ClientRuntimeConfig.Compatibility.INCOMPATIBLE
+                && compatibility != ClientRuntimeConfig.Compatibility.WAITING
+                && WB.inputs.available() && errors.isEmpty();
+        if (WB.lastWrittenBlueprint != null) {
+            g.fakeItem(blueprintStack(WB.lastWrittenBlueprint), OUT_X + 1, SLOT_Y + 1);
+            g.outline(OUT_X, SLOT_Y, 18, 18, SELECTED);
+        } else if (WB.paperStaged && valid) {
+            var previewData = new BlueprintData(PrinterLayout.from(WB.layout), ProjectionController.lockedAnchor());
+            g.fakeItem(blueprintStack(previewData), OUT_X + 1, SLOT_Y + 1);
+            g.fill(OUT_X + 1, SLOT_Y + 1, OUT_X + 17, SLOT_Y + 17, 0x44365264);
+            g.outline(OUT_X, SLOT_Y, 18, 18, 0xFF69A8D8);
+        } else {
+            g.fakeItem(new ItemStack(PrinterContent.BLUEPRINT.get()), OUT_X + 1, SLOT_Y + 1);
+            g.fill(OUT_X + 1, SLOT_Y + 1, OUT_X + 17, SLOT_Y + 17, 0xC020262C);
+        }
+
+        Component supplyLabel = creative ? tr("blueprint_creative")
+                : paperCount > 0 ? tr("blueprint_paper_count", paperCount) : tr("blueprint_no_paper");
+        int supplyColor = creative ? OK : paperCount > 0 ? MUTED : ALERT;
+        text(g, CARD_X + 5, CARD_Y + 42, CARD_W - 10, supplyLabel, supplyColor);
+
+        int boxY = CARD_Y + 55;
+        g.fill(CARD_X + 4, boxY, CARD_X + CARD_W - 4, boxY + 59, 0xFF1E242B);
+        g.outline(CARD_X + 4, boxY, CARD_W - 8, 59, 0xFF3E4A56);
+        var anchorOpt = ProjectionController.lockedAnchor();
+        if (anchorOpt.isPresent()) {
+            var anchor = anchorOpt.get();
+            text(g, CARD_X + 7, boxY + 4, CARD_W - 14, tr("blueprint_pos_locked"), OK);
+            text(g, CARD_X + 7, boxY + 15, CARD_W - 14,
+                    Component.literal(anchor.origin().getX() + "," + anchor.origin().getY() + "," + anchor.origin().getZ()), LIGHT);
+            text(g, CARD_X + 7, boxY + 26, CARD_W - 14,
+                    tr("blueprint_rot_deg", BlueprintData.rotationDegrees(anchor.rotation())), MUTED);
+        } else {
+            paragraph(g, CARD_X + 7, boxY + 5, CARD_W - 14, 3, tr("blueprint_pos_auto"), MUTED);
+        }
+
+        int msgY = CARD_Y + 120;
+        if (WB.blueprintStatus != null) {
+            paragraph(g, CARD_X + 5, msgY, CARD_W - 10, 5, WB.blueprintStatus, WB.blueprintStatusError ? ALERT : OK);
+        } else if (!errors.isEmpty()) {
+            paragraph(g, CARD_X + 5, msgY, CARD_W - 10, 5, Component.translatable(errors.getFirst()), ALERT);
+        } else {
+            paragraph(g, CARD_X + 5, msgY, CARD_W - 10, 5,
+                    tr(WB.paperStaged ? "blueprint_hint_write" : "blueprint_hint_paper"), MUTED);
+        }
     }
 
     private void resource(GuiGraphicsExtractor g, int y, String key, ItemStack stack) {
@@ -375,7 +453,7 @@ public final class SimulatorWidget implements IRecipeWidget {
         controls.add(control(52,155,45,WB.layersMode ? "assembly" : "layer",() -> WB.layersMode = !WB.layersMode));
         controls.add(arrow(6,173,"<","part_previous",() -> WB.cyclePart(-1)));
         controls.add(arrow(24,173,">","part_next",() -> WB.cyclePart(1)));
-        controls.add(control(43,173,54,"ghost",ProjectionController::begin));
+        controls.add(control(43,173,54,"preview",ProjectionController::begin));
         controls.add(arrow(6,213,"<","layer_previous",() -> layer(-1)));
         controls.add(arrow(24,213,">","layer_next",() -> layer(1)));
         controls.add(stepControl(51,213,"port_minus",step -> ports(-step)));
@@ -396,12 +474,89 @@ public final class SimulatorWidget implements IRecipeWidget {
         }));
         controls.add(control(314,124,46,"reset",WB::reset));
         controls.add(control(362,124,51,WB.blocksMode?"results":"blocks",() -> WB.blocksMode = !WB.blocksMode));
-        controls.add(new Control(110,209,65,16,tr("auto"),tr("control.auto"),ready&&!WB.designing(),() -> {
+        controls.add(new Control(110,209,148,16,tr("auto"),tr("control.auto"),ready&&!WB.designing(),() -> {
             var mc=Minecraft.getInstance();
             mc.setScreen(new AutoDesignScreen(mc.screen));
         }));
-        controls.add(new Control(177,209,81,16,tr("print_short"),tr("control.print"),ready,ProjectionController::sendToPrinter));
+        boolean validWrite = ready && WB.paperStaged && layoutErrors().isEmpty();
+        controls.add(new Control(ARROW_X, SLOT_Y, 26, 18, Component.literal("->"),
+                tr("control.write_blueprint"), validWrite, this::writeBlueprint));
+        boolean hasAnchor = ProjectionController.lockedAnchor().isPresent();
+        controls.add(new Control(CARD_X + 7, CARD_Y + 95, CARD_W - 14, 15,
+                tr(hasAnchor ? "blueprint_clear_btn" : "blueprint_set_btn"),
+                tr(hasAnchor ? "control.blueprint_clear" : "control.blueprint_set"),
+                true, hasAnchor ? ProjectionController::clearLockedAnchor : ProjectionController::begin));
         return controls;
+    }
+
+    private static List<String> layoutErrors() {
+        return WB.layout.validationErrors(Math.min(PrinterLayout.LIMIT, ClientRuntimeConfig.config().maxSize()));
+    }
+
+    private static boolean isCreative() {
+        var player = Minecraft.getInstance().player;
+        return player != null && player.isCreative();
+    }
+
+    private static int countPlayerPaper() {
+        var player = Minecraft.getInstance().player;
+        if (player == null) return 0;
+        int total = 0;
+        var inv = player.getInventory();
+        for (int i = 0; i < 36; i++) {
+            var stack = inv.getItem(i);
+            if (stack.is(Items.PAPER)) total += stack.getCount();
+        }
+        var offhand = inv.getItem(Inventory.SLOT_OFFHAND);
+        if (offhand.is(Items.PAPER)) total += offhand.getCount();
+        return total;
+    }
+
+    private static ItemStack blueprintStack(BlueprintData data) {
+        var stack = new ItemStack(PrinterContent.BLUEPRINT.get());
+        stack.set(PrinterContent.BLUEPRINT_DATA.get(), data);
+        return stack;
+    }
+
+    private void writeBlueprint() {
+        var errors = layoutErrors();
+        if (!errors.isEmpty()) {
+            WB.blueprintStatus = Component.translatable(errors.getFirst());
+            WB.blueprintStatusError = true;
+            return;
+        }
+        if (!WB.paperStaged) {
+            WB.blueprintStatus = tr("blueprint_need_staged");
+            WB.blueprintStatusError = true;
+            return;
+        }
+        if (!isCreative() && countPlayerPaper() == 0) {
+            WB.paperStaged = false;
+            WB.blueprintStatus = tr("blueprint_need_paper");
+            WB.blueprintStatusError = true;
+            return;
+        }
+        var data = new BlueprintData(PrinterLayout.from(WB.layout), ProjectionController.lockedAnchor());
+        ClientPacketDistributor.sendToServer(new WriteBlueprintRequest(data.layout(), data.anchor()));
+        WB.paperStaged = false;
+        WB.lastWrittenBlueprint = data;
+        WB.blueprintStatus = tr("blueprint_saved_inv");
+        WB.blueprintStatusError = false;
+    }
+
+    private void togglePaperSlot() {
+        if (WB.paperStaged) {
+            WB.paperStaged = false;
+            WB.clearBlueprintStatus();
+            return;
+        }
+        if (isCreative() || countPlayerPaper() > 0) {
+            WB.paperStaged = true;
+            WB.clearBlueprintStatus();
+        } else {
+            WB.blueprintStatus = tr("blueprint_need_paper");
+            WB.blueprintStatusError = true;
+        }
     }
 
     private void resize(int dx,int dz) {
@@ -466,6 +621,29 @@ public final class SimulatorWidget implements IRecipeWidget {
             int row = WB.blockOffset+localRow;
             if (localRow>=0 && localRow<LIST_ROWS && row<entries.size())
                 tooltip.add(BuiltInRegistries.BLOCK.getValue(Identifier.parse(entries.get(row).getKey())).getName());
+            return;
+        }
+        if (x >= PAPER_X && x < PAPER_X + 18 && y >= SLOT_Y && y < SLOT_Y + 18) {
+            tooltip.add(tr(WB.paperStaged ? "blueprint_paper_remove_tip" : "blueprint_paper_put_tip"));
+            return;
+        }
+        if (x >= OUT_X && x < OUT_X + 18 && y >= SLOT_Y && y < SLOT_Y + 18) {
+            if (WB.lastWrittenBlueprint != null) {
+                var layout = WB.lastWrittenBlueprint.layout();
+                tooltip.add(Component.translatable("item.just_enough_oritech.reactor_blueprint").withStyle(ChatFormatting.WHITE));
+                tooltip.add(tr("blueprint_size", layout.width(), layout.length(), layout.height(), layout.ports())
+                        .copy().withStyle(ChatFormatting.AQUA));
+                if (WB.lastWrittenBlueprint.anchor().isPresent()) {
+                    var anchor = WB.lastWrittenBlueprint.anchor().get();
+                    tooltip.add(tr("blueprint_anchored", anchor.origin().getX(), anchor.origin().getY(), anchor.origin().getZ(),
+                            BlueprintData.rotationDegrees(anchor.rotation())).copy().withStyle(ChatFormatting.GREEN));
+                } else {
+                    tooltip.add(tr("blueprint_unanchored").copy().withStyle(ChatFormatting.YELLOW));
+                }
+                tooltip.add(tr("blueprint_saved_inv").copy().withStyle(ChatFormatting.GRAY));
+            } else {
+                tooltip.add(tr("blueprint_out_tip"));
+            }
         }
     }
 
@@ -481,6 +659,14 @@ public final class SimulatorWidget implements IRecipeWidget {
             return true;
         }
         if (button != 0) return false;
+        if (x >= PAPER_X && x < PAPER_X + 18 && y >= SLOT_Y && y < SLOT_Y + 18) {
+            togglePaperSlot();
+            return true;
+        }
+        if (x >= OUT_X && x < OUT_X + 18 && y >= SLOT_Y && y < SLOT_Y + 18) {
+            if (WB.paperStaged) writeBlueprint();
+            return true;
+        }
         if (list(x,y) && x>=406) {
             scrollBar(y);
             return true;

@@ -42,6 +42,10 @@ public final class Workbench {
     long autoDesignGeneration;
     public ReactorDesigner.Request lastRequest;
     public net.minecraft.network.chat.Component designStatus;
+    public boolean paperStaged;
+    public com.justenoughoritech.printer.BlueprintData lastWrittenBlueprint;
+    public net.minecraft.network.chat.Component blueprintStatus;
+    public boolean blueprintStatusError;
     public int revision() { return revision; }
     public boolean designing() { return designing; }
     private com.justenoughoritech.network.ReactorConfigPayload inputsSnapshot;
@@ -136,12 +140,22 @@ public final class Workbench {
         inputsSnapshot = null;
         inputs = new ReactorInputs(List.of(), List.of(), "Waiting for server recipes");
         designStatus = null;
+        lastWrittenBlueprint = null;
+        blueprintStatus = null;
+        blueprintStatusError = false;
+    }
+
+    public void clearBlueprintStatus() {
+        lastWrittenBlueprint = null;
+        blueprintStatus = null;
+        blueprintStatusError = false;
     }
 
     public void edited() {
         reset();
         revision++;
         designStatus = null;
+        clearBlueprintStatus();
         gridOffsetX = Math.min(gridOffsetX, Math.max(0, layout.width() - 5));
         gridOffsetZ = Math.min(gridOffsetZ, Math.max(0, layout.length() - 5));
         selectedLayer = Math.min(selectedLayer, layout.height() - 1);

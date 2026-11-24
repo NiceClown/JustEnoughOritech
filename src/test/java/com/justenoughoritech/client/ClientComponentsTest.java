@@ -383,4 +383,34 @@ class ClientComponentsTest {
         assertNotEquals(TextViewport.key(0, -1), TextViewport.key(-1, 0));
         assertNotEquals(TextViewport.key(1, -1), TextViewport.key(0, -1));
     }
+
+    @Test
+    void workbenchBlueprintStatusResetsOnEditAndDisconnectAndDegreesMatchRotations() {
+        var wb = Workbench.INSTANCE;
+        var layout = new com.justenoughoritech.printer.PrinterLayout(2, 2, 2, 1, List.of("a", "b", "c", "d"));
+        wb.paperStaged = true;
+        wb.lastWrittenBlueprint = new com.justenoughoritech.printer.BlueprintData(layout, java.util.Optional.empty());
+        wb.blueprintStatus = Component.literal("written");
+        wb.blueprintStatusError = false;
+
+        wb.edited();
+        assertNull(wb.lastWrittenBlueprint);
+        assertNull(wb.blueprintStatus);
+        assertFalse(wb.blueprintStatusError);
+        assertTrue(wb.paperStaged, "editing keeps paper ready to write the updated layout");
+
+        wb.lastWrittenBlueprint = new com.justenoughoritech.printer.BlueprintData(layout, java.util.Optional.empty());
+        wb.blueprintStatus = Component.literal("err");
+        wb.blueprintStatusError = true;
+        wb.invalidateServerState();
+        assertNull(wb.lastWrittenBlueprint);
+        assertNull(wb.blueprintStatus);
+        assertFalse(wb.blueprintStatusError);
+
+        assertEquals(0, com.justenoughoritech.printer.BlueprintData.rotationDegrees(null));
+        assertEquals(0, com.justenoughoritech.printer.BlueprintData.rotationDegrees(net.minecraft.world.level.block.Rotation.NONE));
+        assertEquals(90, com.justenoughoritech.printer.BlueprintData.rotationDegrees(net.minecraft.world.level.block.Rotation.CLOCKWISE_90));
+        assertEquals(180, com.justenoughoritech.printer.BlueprintData.rotationDegrees(net.minecraft.world.level.block.Rotation.CLOCKWISE_180));
+        assertEquals(270, com.justenoughoritech.printer.BlueprintData.rotationDegrees(net.minecraft.world.level.block.Rotation.COUNTERCLOCKWISE_90));
+    }
 }

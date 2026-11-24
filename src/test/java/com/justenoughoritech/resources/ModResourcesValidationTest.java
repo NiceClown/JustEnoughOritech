@@ -95,7 +95,7 @@ class ModResourcesValidationTest {
         var referenced = new TreeSet<String>();
 
         // Explicit full keys and helper calls across Java sources.
-        var fullKey = Pattern.compile("(?:gui|jei|key|block)\\.just_enough_oritech\\.[a-zA-Z0-9_.]+");
+        var fullKey = Pattern.compile("(?:gui|jei|key|block|item)\\.just_enough_oritech\\.[a-zA-Z0-9_.]+");
         var trCall = Pattern.compile("\\btr\\(\"([^\"]+)\"");
         var controlCall = Pattern.compile("\\b(?:control|stepControl)\\([^,]+,[^,]+,(?:[^,]+,)?\"([^\"]+)\"");
         var arrowCall = Pattern.compile("\\barrow\\([^,]+,[^,]+,[^,]+,\"([^\"]+)\"");
@@ -132,9 +132,29 @@ class ModResourcesValidationTest {
         for (int state = 0; state <= 6; state++) {
             referenced.add("gui.just_enough_oritech.printer_state." + state);
         }
-        for (String step : Set.of("preview", "attach", "keys", "send", "power")) {
+        for (String step : Set.of("design", "anchor", "write", "slot", "power")) {
             referenced.add("gui.just_enough_oritech.printer_help." + step);
         }
+        for (var dir : net.minecraft.core.Direction.values()) {
+            referenced.add("gui.just_enough_oritech.face." + dir.getName());
+        }
+        referenced.add("item.just_enough_oritech.reactor_blueprint");
+        referenced.add("gui.just_enough_oritech.control.write_blueprint");
+        referenced.add("gui.just_enough_oritech.control.blueprint_clear");
+        referenced.add("gui.just_enough_oritech.control.blueprint_set");
+        referenced.add("gui.just_enough_oritech.control.preview");
+        referenced.add("gui.just_enough_oritech.blueprint_clear_btn");
+        referenced.add("gui.just_enough_oritech.blueprint_set_btn");
+        referenced.add("gui.just_enough_oritech.blueprint_hint_write");
+        referenced.add("gui.just_enough_oritech.blueprint_hint_paper");
+        referenced.add("gui.just_enough_oritech.blueprint_paper_put_tip");
+        referenced.add("gui.just_enough_oritech.blueprint_paper_remove_tip");
+        referenced.add("gui.just_enough_oritech.printer_restart");
+        referenced.add("gui.just_enough_oritech.printer_reset_pos");
+        referenced.add("gui.just_enough_oritech.printer_preview_hide");
+        referenced.add("gui.just_enough_oritech.printer_preview_short");
+        referenced.add("gui.just_enough_oritech.printer_orient_badge");
+        referenced.add("gui.just_enough_oritech.printer_orient_mirrored");
         for (String keyName : Set.of("open_simulator", "lock_projection", "cancel_projection", "rotate_projection")) {
             referenced.add("key.just_enough_oritech." + keyName);
         }
@@ -227,6 +247,26 @@ class ModResourcesValidationTest {
         var pool = loot.getAsJsonArray("pools").get(0).getAsJsonObject();
         assertEquals("just_enough_oritech:reactor_printer",
                 pool.getAsJsonArray("entries").get(0).getAsJsonObject().get("name").getAsString());
+
+        var bpItemDef = JsonParser.parseString(
+                Files.readString(RESOURCES.resolve("assets/just_enough_oritech/items/reactor_blueprint.json"),
+                        StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals("just_enough_oritech:item/reactor_blueprint",
+                bpItemDef.getAsJsonObject("model").get("model").getAsString());
+
+        var bpModel = JsonParser.parseString(
+                Files.readString(RESOURCES.resolve("assets/just_enough_oritech/models/item/reactor_blueprint.json"),
+                        StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals("just_enough_oritech:item/reactor_blueprint",
+                bpModel.getAsJsonObject("textures").get("layer0").getAsString());
+
+        Path bpPng = RESOURCES.resolve("assets/just_enough_oritech/textures/item/reactor_blueprint.png");
+        assertTrue(Files.isRegularFile(bpPng), "Missing blueprint texture: " + bpPng);
+        byte[] bpBytes = Files.readAllBytes(bpPng);
+        assertTrue(bpBytes.length > 24);
+        byte[] bpHeader = new byte[8];
+        System.arraycopy(bpBytes, 0, bpHeader, 0, 8);
+        assertArrayEquals(pngMagic, bpHeader, "Invalid PNG signature in " + bpPng);
     }
 
     @Test

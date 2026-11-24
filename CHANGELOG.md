@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.0 — Reactor Blueprints and 3D Printer overhaul
+
+Just Enough Oritech by **NiceClown**.
+
+This release overhauls the Reactor 3D Printer workflow around physical **Reactor Blueprint** items, adds a floating Blueprint Card to the JEI Reactor Simulator, supports both pre-anchored and auto-placed projections, and brings full orientation and positioning controls directly into the 3D Printer GUI.
+
+### Reactor Blueprint item and JEI Blueprint Card
+
+- **Added the Reactor Blueprint item (`just_enough_oritech:reactor_blueprint`)**: stores the reactor layout, energy port count, and optional world anchor (coordinates, dimension, rotation, and mirror state), with custom item artwork and a detailed tooltip showing core dimensions, block count, and placement mode.
+- **Floating Blueprint Card in the JEI Reactor Simulator**: appears neatly beside the simulator panel with a Paper input slot, a write arrow (`→`), a Blueprint output slot, and quick world-anchor controls (`Set in world` / `Clear`).
+- **Paper-to-Blueprint writing**: place vanilla Paper in the input slot (consumed in Survival, free in Creative) and click the write arrow to generate a Reactor Blueprint for the current design.
+
+### Two-path 3D Printer workflow
+
+- **Path 1 — Pre-anchored in world**: lock a world projection (`Y`) before writing the blueprint to embed its exact world coordinates and rotation. Inserting that blueprint into a 3D Printer binds the saved placement immediately.
+- **Path 2 — Auto-placed above printer**: insert an unanchored blueprint straight into a 3D Printer's blueprint slot and the printer automatically positions the projection flush above its **Top** face (falling back to other faces if needed).
+- **Physical Blueprint Slot**: the 3D Printer now uses a dedicated blueprint slot (supports Shift-clicking, persists with the block entity, drops the blueprint when the printer is broken, and cleanly clears the active job when removed while keeping already-placed blocks).
+
+### Full in-GUI 3D Printer controls
+
+- **Attach Side selector**: snap the build flush against any face of the printer (`Top`, `Bottom`, `North`, `South`, `East`, `West`) or keep `Anchored` coordinates.
+- **Full orientation controls**: rotate 90° counterclockwise/clockwise (`↺` / `↻`) and mirror across X or Z (`Flip X` / `Flip Z`) with automatic Nuclear Reactor Controller facing updates (full 8-way rotation and mirror symmetry).
+- **Axis nudging, world aiming and preview**: nudge offsets along `X`, `Y`, and `Z` (`±1` click, `±10` with Shift, `±50` with Ctrl), re-aim in the world (`Aim in world`), toggle the world hologram (`Show proj.` / `Hide proj.`), reset offsets (`Reset pos`), or restart build progress (`Reset prog.`).
+- **3D preview and localization polish**: added live orientation and controller-facing badges to the interactive 3D preview and updated both English (`en_us`) and Russian (`ru_ru`) translations with crisp, non-clipping labels.
+
+### Network and compatibility
+
+- Network protocol updated to **`0.6.0`** (`WriteBlueprintRequest` and `PrinterControlRequest` replace legacy `PrintRequest`). Both client and server must update to `0.6.0`.
+- Minecraft **26.1.2**, NeoForge **26.1.2.109+**, Java **25**.
+- Verified with Oritech **2.0.0-exp12** and **2.0.0-exp14**; JEI **29.53.0.115** verified.
+
+### Tests and modpack verification
+
+- **152/152** automated JUnit 5 tests pass across 17 suites (blueprint codecs, rotation/mirror symmetry, packet validation, printer state machine, UI bounds, and resource/translation parity).
+- Verified end-to-end in live clients (`44/44` assertions, 0 mod errors/warnings) across standalone Oritech `2.0.0-exp12`, **All the Mods 11** (301 pack mods, `Oritech 2.0.0-exp12`), and **FTB Evolution 2** (437 pack mods, `Oritech 2.0.0-exp14` + `oritechthings` + `applied_oritech`, including live Nuclear Reactor Controller activation and FTB Chunks claim-protection checks).
+
 ## 0.5.6 — Oritech maxSize, FTB recipe and hardening fix release
 
 Just Enough Oritech by **NiceClown**.

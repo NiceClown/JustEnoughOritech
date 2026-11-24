@@ -1,6 +1,7 @@
 package com.justenoughoritech.printer;
 
 import com.justenoughoritech.sim.ReactorLayout;
+import com.mojang.serialization.JsonOps;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -82,22 +84,66 @@ class PrinterPacketsAndInspectionTest {
     }
 
     @Test
-    void printRequestCodecRoundTripsAcrossAllDirectionsAndRotations() {
+    void blueprintDataAndRequestsCodecRoundTripAnchoredAndUnanchored() {
         var layout = new PrinterLayout(2, 3, 2, 2,
                 List.of("oritech:reactor_rod", "", "oritech:reactor_heat_vent", "", "", ""));
+        var dim = Identifier.fromNamespaceAndPath("minecraft", "overworld");
         var pos = new BlockPos(-123, 72, 456);
-        for (Direction dir : Direction.values()) {
-            for (Rotation rot : Rotation.values()) {
-                var request = new PrintRequest(pos, dir, rot, layout);
-                var b = buf();
-                PrintRequest.CODEC.encode(b, request);
-                var decoded = PrintRequest.CODEC.decode(b);
-                assertEquals(request, decoded);
-                assertEquals(0, b.readableBytes());
-                assertEquals(PrintRequest.TYPE, request.type());
-                assertEquals("just_enough_oritech:print_request", PrintRequest.TYPE.id().toString());
+
+        var unanchored = new BlueprintData(layout, Optional.empty());
+        var bUnanchored = buf();
+        BlueprintData.STREAM_CODEC.encode(bUnanchored, unanchored);
+        assertEquals(unanchored, BlueprintData.STREAM_CODEC.decode(bUnanchored));
+        assertEquals(0, bUnanchored.readableBytes());
+        assertEquals(unanchored, BlueprintData.CODEC.parse(JsonOps.INSTANCE,
+                BlueprintData.CODEC.encodeStart(JsonOps.INSTANCE, unanchored).getOrThrow()).getOrThrow());
+
+        for (Rotation rot : Rotation.values()) {
+            var anchor = new BlueprintData.Anchor(dim, pos, rot);
+            var anchored = new BlueprintData(layout, Optional.of(anchor));
+            var bAnchored = buf();
+            BlueprintData.STREAM_CODEC.encode(bAnchored, anchored);
+            assertEquals(anchored, BlueprintData.STREAM_CODEC.decode(bAnchored));
+            assertEquals(0, bAnchored.readableBytes());
+            assertEquals(anchored, BlueprintData.CODEC.parse(JsonOps.INSTANCE,
+                    BlueprintData.CODEC.encodeStart(JsonOps.INSTANCE, anchored).getOrThrow()).getOrThrow());
+
+            var writeReq = new WriteBlueprintRequest(layout, Optional.of(anchor));
+            var bWrite = buf();
+            WriteBlueprintRequest.CODEC.encode(bWrite, writeReq);
+            assertEquals(writeReq, WriteBlueprintRequest.CODEC.decode(bWrite));
+            assertEquals(0, bWrite.readableBytes());
+            assertEquals("just_enough_oritech:write_blueprint", WriteBlueprintRequest.TYPE.id().toString());
+        }
+
+        var writeAuto = new WriteBlueprintRequest(layout, Optional.empty());
+        var bWriteAuto = buf();
+        WriteBlueprintRequest.CODEC.encode(bWriteAuto, writeAuto);
+        assertEquals(writeAuto, WriteBlueprintRequest.CODEC.decode(bWriteAuto));
+        assertEquals(0, bWriteAuto.readableBytes());
+    }
+
+    @Test
+    void printerControlRequestCodecRoundTripsAcrossAllActionsFacesAndRotations() {
+        var pos = new BlockPos(-45, 70, 999);
+        for (var action : PrinterControlRequest.Action.values()) {
+            for (Direction dir : Direction.values()) {
+                for (Rotation rot : Rotation.values()) {
+                    var req = new PrinterControlRequest(pos, action, -10, 50, 2, dir, rot);
+                    var b = buf();
+                    PrinterControlRequest.CODEC.encode(b, req);
+                    assertEquals(req, PrinterControlRequest.CODEC.decode(b));
+                    assertEquals(0, b.readableBytes());
+                }
             }
         }
+        assertEquals("just_enough_oritech:printer_control", PrinterControlRequest.TYPE.id().toString());
+        assertEquals(PrinterControlRequest.Action.MOVE, PrinterControlRequest.move(pos, 1, -2, 3).action());
+        assertEquals(PrinterControlRequest.Action.SET_FACE, PrinterControlRequest.setFace(pos, Direction.EAST).action());
+        assertEquals(PrinterControlRequest.Action.SET_ANCHOR,
+                PrinterControlRequest.setAnchor(pos, new BlockPos(1, 2, 3), Rotation.CLOCKWISE_90).action());
+        assertEquals(PrinterControlRequest.Action.FLIP_X,
+                PrinterControlRequest.simple(pos, PrinterControlRequest.Action.FLIP_X).action());
     }
 
     @Test
